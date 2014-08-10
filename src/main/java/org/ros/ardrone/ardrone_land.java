@@ -281,6 +281,8 @@ public void onStart(final ConnectedNode connectedNode) {
 				caminfomsg.setDistortionModel("plumb_bob");
 				//caminfomsg.setK(K);
 				//caminfomsg.setP(P);
+				imgpub.publish(imagemess);
+				caminfopub.publish(caminfomsg);
 			}
 			synchronized(navMutex) {
 				str.setX(phi);
@@ -288,8 +290,6 @@ public void onStart(final ConnectedNode connectedNode) {
 				str.setZ(0/*gaz*/);
 				str.setW(psi);
 				navpub.publish(str);
-				imgpub.publish(imagemess);
-				caminfopub.publish(caminfomsg);
 				rangemsg.setFieldOfView(30);
 				rangemsg.setMaxRange(600);
 				rangemsg.setMinRange(6);
