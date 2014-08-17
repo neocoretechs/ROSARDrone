@@ -20,20 +20,23 @@ import org.ros.message.Time;
 import org.jboss.netty.buffer.ChannelBuffers;
 
 import de.yadrone.base.AbstractConfigFactory;
-import de.yadrone.base.IARDrone;
 import de.yadrone.base.IARDroneLand;
 import de.yadrone.base.IDrone;
 import de.yadrone.base.navdata.data.Altitude;
 import de.yadrone.base.navdata.listener.AltitudeListener;
 import de.yadrone.base.navdata.listener.AttitudeListener;
-import de.yadrone.base.video.ImageListener;
+
+import com.twilight.h264.decoder.AVFrame;
+import com.twilight.h264.player.FrameUtils;
+
+import com.twilight.h264.player.RGBListener;
 
 public class ardrone_land extends AbstractNodeMain  {
 
 	IDrone drone;
 	double phi, theta, psi;
 	int range;
-	byte[] bbuf = new byte[320*240*3];
+	byte[] bbuf;// = new byte[320*240*3];
 	boolean started = true;
 	boolean videohoriz = true;
 	boolean emergency = false;
@@ -43,12 +46,12 @@ public class ardrone_land extends AbstractNodeMain  {
 	int[] rgbArray = new int[imwidth*imheight];
 	Object vidMutex = new Object(); 
 	Object navMutex = new Object();
+	Object rngMutex = new Object();
 
 @Override
 public GraphName getDefaultNodeName() {
 	return GraphName.of("ardrone");
 }
-
 
 @Override
 public void onStart(final ConnectedNode connectedNode) {
@@ -64,8 +67,11 @@ public void onStart(final ConnectedNode connectedNode) {
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	final Publisher<sensor_msgs.Range> rangepub = 
-		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
-		
+		connectedNode.newPublisher("robocore/range", sensor_msgs.Range._TYPE);
+	
+	final std_msgs.Header ihead = connectedNode.getTopicMessageFactory().newFromType(std_msgs.Header._TYPE);
+	final sensor_msgs.Range rangemsg = rangepub.newMessage();
+	
 	try{
 		drone = (IDrone)AbstractConfigFactory.createFactory("Land").createDrone();
 		drone.getNavDataManager().addAttitudeListener(new AttitudeListener() {
@@ -83,7 +89,9 @@ public void onStart(final ConnectedNode connectedNode) {
 
 			public void attitudeUpdated(float pitch, float roll) { 
 				synchronized(navMutex) {
-					System.out.println("Pitch: " + pitch + " Roll: " + roll);
+					phi = roll;
+					theta = pitch;
+					//System.out.println("Pitch: " + pitch + " Roll: " + roll);
 				}
 			}
 			
@@ -96,36 +104,45 @@ public void onStart(final ConnectedNode connectedNode) {
 		
 		drone.getNavDataManager().addAltitudeListener(new AltitudeListener() {
 			public void receivedExtendedAltitude(Altitude ud) {
-				synchronized(navMutex) {
+				synchronized(rngMutex) {
 					//System.out.println("Ext. Alt.:"+ud);
-					range = ud.getRaw();
+					if( ud.getRaw() != 0 )
+						range = ud.getRaw();
 				}
 			}
 			@Override
 			public void receivedAltitude(int altitude) {
-				synchronized(navMutex) {
+				synchronized(rngMutex) {
 					//System.out.println("Altitude: "+altitude);
-					if( altitude != 0 ) range = altitude;
+					if( altitude != 0 ) {
+						range = altitude;
+					}
 				}
 			}
 		});
 		
-	    drone.getVideoManager().addImageListener(new ImageListener() {
-	            public void imageUpdated(BufferedImage newImage)
+	    drone.getVideoManager().addImageListener(new RGBListener() {
+	            public void imageUpdated(AVFrame newImage)
 	            {
 	            	synchronized(vidMutex) {
-	            		imwidth = newImage.getWidth();
-	            		imheight = newImage.getHeight();
-	            		System.out.println("img:"+imwidth+" "+imheight);
-	            		//assert( imwidth == 320 && imheight == 240);
+	            		imwidth = newImage.imageWidth;
+	            		imheight = newImage.imageHeight;
+	            		//System.out.println("img:"+imwidth+" "+imheight);
 	            		//int[] rgbArray = new int[imwidth*imheight];
-	            		newImage.getRGB(0, 0, imwidth, imheight, rgbArray, 0, imwidth);
-	            		for(int i=0; i < imwidth*imheight; i++)
-	            		{
-	            			bbuf[i*3 + 2] = (byte)((rgbArray[i] >> 16) & 0xff);
-	            			bbuf[i*3 + 1] = (byte)((rgbArray[i] >> 8) & 0xff);
-	            			bbuf[i*3] = (byte)(0xff & rgbArray[i]);
-	            		}
+	            		//newImage.getRGB(0, 0, imwidth, imheight, rgbArray, 0, imwidth);
+	            		// this is implemented in Frameutils.YUV2RGB
+	            		//for(int i=0; i < imwidth*imheight; i++)
+	            		//{
+	            		//	bbuf[i*3 + 2] = (byte)((rgbArray[i] >> 16) & 0xff);
+	            		//	bbuf[i*3 + 1] = (byte)((rgbArray[i] >> 8) & 0xff);
+	            		//	bbuf[i*3] = (byte)(0xff & rgbArray[i]);
+	            		//}
+	            		
+						int bufferSize = imwidth * imheight * 3;
+						if (bbuf == null || bufferSize != bbuf.length) {
+							bbuf = new byte[bufferSize];
+						}
+						FrameUtils.YUV2RGB(newImage, bbuf); // RGBA32 to BGR8
 	            	}
 	            }
 	    });
@@ -136,7 +153,6 @@ public void onStart(final ConnectedNode connectedNode) {
 	{
 		e.printStackTrace();
 	}
-
 
 	substol.addMessageListener(new MessageListener<std_msgs.Empty>() {
 	@Override
@@ -283,6 +299,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				//caminfomsg.setP(P);
 				imgpub.publish(imagemess);
 				caminfopub.publish(caminfomsg);
+				//System.out.println("Pub cam:"+imagemess);
 			}
 			synchronized(navMutex) {
 				str.setX(phi);
@@ -290,15 +307,19 @@ public void onStart(final ConnectedNode connectedNode) {
 				str.setZ(0/*gaz*/);
 				str.setW(psi);
 				navpub.publish(str);
+				//System.out.println("Pub nav:"+str);
+			}
+			synchronized(rngMutex) {
 				rangemsg.setFieldOfView(30);
 				rangemsg.setMaxRange(600);
 				rangemsg.setMinRange(6);
 				rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
 				rangemsg.setRange(range);
 				rangepub.publish(rangemsg);
-				sequenceNumber++;
-				Thread.sleep(50);
+				//System.out.println("Pub range:"+rangemsg);
 			}
+			sequenceNumber++;
+			Thread.sleep(50);
 		}
 	});  
 

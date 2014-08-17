@@ -23,13 +23,18 @@ import org.ros.node.topic.Subscriber;
 import org.ros.message.Time;
 import org.jboss.netty.buffer.ChannelBuffers;
 
+import com.twilight.h264.decoder.AVFrame;
+import com.twilight.h264.player.FrameUtils;
+import com.twilight.h264.player.ImageListener;
+import com.twilight.h264.player.RGBListener;
+
 import de.yadrone.base.ARDrone;
 import de.yadrone.base.AbstractConfigFactory;
 import de.yadrone.base.IARDrone;
 import de.yadrone.base.navdata.data.Altitude;
 import de.yadrone.base.navdata.listener.AltitudeListener;
 import de.yadrone.base.navdata.listener.AttitudeListener;
-import de.yadrone.base.video.ImageListener;
+
 
 public class ardrone_air extends AbstractNodeMain  {
 
@@ -95,7 +100,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				}
 			}
 		});
-		
+		/*
 	    drone.getVideoManager().addImageListener(new ImageListener() {
 	            public void imageUpdated(BufferedImage newImage)
 	            {
@@ -117,6 +122,23 @@ public void onStart(final ConnectedNode connectedNode) {
 	    });
 		//imwidth = 320;
 		//imheight = 240;
+		 */
+		
+
+	    drone.getVideoManager().addImageListener(new RGBListener() {
+            public void imageUpdated(AVFrame newImage)
+            {
+            	synchronized(vidMutex) {
+            		imwidth = newImage.imageWidth;
+            		imheight = newImage.imageHeight;
+					int bufferSize = imwidth * imheight * 3;
+					if (bbuf == null || bufferSize != bbuf.length) {
+						bbuf = new byte[bufferSize];
+					}
+					FrameUtils.YUV2RGB(newImage, bbuf); // RGBA32 to BGR8
+            	}
+            }
+	    });
 	    
 		drone.getNavDataManager().addAltitudeListener(new AltitudeListener() {
 			public void receivedExtendedAltitude(Altitude ud) {
