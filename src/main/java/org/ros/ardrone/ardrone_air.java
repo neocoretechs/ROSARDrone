@@ -51,6 +51,7 @@ public class ardrone_air extends AbstractNodeMain  {
 	int[] rgbArray = new int[imwidth*imheight];
 	Object vidMutex = new Object(); 
 	Object navMutex = new Object();
+	Object rngMutex = new Object();
 
 @Override
 public GraphName getDefaultNodeName() {
@@ -100,31 +101,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				}
 			}
 		});
-		/*
-	    drone.getVideoManager().addImageListener(new ImageListener() {
-	            public void imageUpdated(BufferedImage newImage)
-	            {
-	            	synchronized(vidMutex) {
-	            		imwidth = newImage.getWidth();
-	            		imheight = newImage.getHeight();
-	            		System.out.println("img:"+imwidth+" "+imheight);
-	            		//assert( imwidth == 320 && imheight == 240);
-	            		//int[] rgbArray = new int[imwidth*imheight];
-	            		newImage.getRGB(0, 0, imwidth, imheight, rgbArray, 0, imwidth);
-	            		for(int i=0; i < imwidth*imheight; i++)
-	            		{
-	            			bbuf[i*3 + 2] = (byte)((rgbArray[i] >> 16) & 0xff);
-	            			bbuf[i*3 + 1] = (byte)((rgbArray[i] >> 8) & 0xff);
-	            			bbuf[i*3] = (byte)(0xff & rgbArray[i]);
-	            		}
-	            	}
-	            }
-	    });
-		//imwidth = 320;
-		//imheight = 240;
-		 */
 		
-
 	    drone.getVideoManager().addImageListener(new RGBListener() {
             public void imageUpdated(AVFrame newImage)
             {
@@ -142,14 +119,14 @@ public void onStart(final ConnectedNode connectedNode) {
 	    
 		drone.getNavDataManager().addAltitudeListener(new AltitudeListener() {
 			public void receivedExtendedAltitude(Altitude ud) {
-				synchronized(navMutex) {
+				synchronized(rngMutex) {
 					//System.out.println("Ext. Alt.:"+ud);
 					range = ud.getRaw();
 				}
 			}
 			@Override
 			public void receivedAltitude(int altitude) {
-				synchronized(navMutex) {
+				synchronized(rngMutex) {
 					//System.out.println("Altitude: "+altitude);
 					if( altitude != 0 ) range = altitude;
 				}
@@ -287,6 +264,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			//double[] P = {160, 0, 160, 0, 0, 160, 120, 0, 0, 0, 1, 0};
 
 			imghead.setSeq(sequenceNumber);
+			sequenceNumber++;
 			tst = connectedNode.getCurrentTime();
 			imghead.setStamp(tst);
 			imghead.setFrameId("0");
@@ -298,31 +276,34 @@ public void onStart(final ConnectedNode connectedNode) {
 				imagemess.setStep(imwidth*3);
 				imagemess.setIsBigendian((byte)0);
 				imagemess.setHeader(imghead);
-
+				imgpub.publish(imagemess);
+				
 				caminfomsg.setHeader(imghead);
 				caminfomsg.setWidth(imwidth);
 				caminfomsg.setHeight(imheight);
 				caminfomsg.setDistortionModel("plumb_bob");
 				//caminfomsg.setK(K);
 				//caminfomsg.setP(P);
+				caminfopub.publish(caminfomsg);
 			}
+			Thread.sleep(10);
 			synchronized(navMutex) {
 				str.setX(phi);
 				str.setY(theta);
 				str.setZ(gaz);
 				str.setW(psi);
 				navpub.publish(str);
-				imgpub.publish(imagemess);
-				caminfopub.publish(caminfomsg);
+			}
+			Thread.sleep(10);
+			synchronized(rngMutex) {
 				rangemsg.setFieldOfView(30);
 				rangemsg.setMaxRange(600);
 				rangemsg.setMinRange(6);
 				rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
 				rangemsg.setRange(range);
 				rangepub.publish(rangemsg);
-				sequenceNumber++;
-				Thread.sleep(50);
 			}
+			Thread.sleep(10);
 		}
 	});  
 

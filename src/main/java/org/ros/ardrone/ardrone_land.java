@@ -67,7 +67,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	final Publisher<sensor_msgs.Range> rangepub = 
-		connectedNode.newPublisher("robocore/range", sensor_msgs.Range._TYPE);
+		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
 	
 	final std_msgs.Header ihead = connectedNode.getTopicMessageFactory().newFromType(std_msgs.Header._TYPE);
 	final sensor_msgs.Range rangemsg = rangepub.newMessage();
@@ -128,16 +128,6 @@ public void onStart(final ConnectedNode connectedNode) {
 	            		imwidth = newImage.imageWidth;
 	            		imheight = newImage.imageHeight;
 	            		//System.out.println("img:"+imwidth+" "+imheight);
-	            		//int[] rgbArray = new int[imwidth*imheight];
-	            		//newImage.getRGB(0, 0, imwidth, imheight, rgbArray, 0, imwidth);
-	            		// this is implemented in Frameutils.YUV2RGB
-	            		//for(int i=0; i < imwidth*imheight; i++)
-	            		//{
-	            		//	bbuf[i*3 + 2] = (byte)((rgbArray[i] >> 16) & 0xff);
-	            		//	bbuf[i*3 + 1] = (byte)((rgbArray[i] >> 8) & 0xff);
-	            		//	bbuf[i*3] = (byte)(0xff & rgbArray[i]);
-	            		//}
-	            		
 						int bufferSize = imwidth * imheight * 3;
 						if (bbuf == null || bufferSize != bbuf.length) {
 							bbuf = new byte[bufferSize];
@@ -283,24 +273,29 @@ public void onStart(final ConnectedNode connectedNode) {
 			imghead.setStamp(tst);
 			imghead.setFrameId("0");
 			synchronized(vidMutex) {
-				imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
-				imagemess.setEncoding("8UC3");
-				imagemess.setWidth(imwidth);
-				imagemess.setHeight(imheight);
-				imagemess.setStep(imwidth*3);
-				imagemess.setIsBigendian((byte)0);
-				imagemess.setHeader(imghead);
+				if( bbuf != null ) {
+					imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
+					imagemess.setEncoding("8UC3");
+					imagemess.setWidth(imwidth);
+					imagemess.setHeight(imheight);
+					imagemess.setStep(imwidth*3);
+					imagemess.setIsBigendian((byte)0);
+					imagemess.setHeader(imghead);
 
-				caminfomsg.setHeader(imghead);
-				caminfomsg.setWidth(imwidth);
-				caminfomsg.setHeight(imheight);
-				caminfomsg.setDistortionModel("plumb_bob");
-				//caminfomsg.setK(K);
-				//caminfomsg.setP(P);
-				imgpub.publish(imagemess);
-				caminfopub.publish(caminfomsg);
-				//System.out.println("Pub cam:"+imagemess);
+					caminfomsg.setHeader(imghead);
+					caminfomsg.setWidth(imwidth);
+					caminfomsg.setHeight(imheight);
+					caminfomsg.setDistortionModel("plumb_bob");
+					//caminfomsg.setK(K);
+					//caminfomsg.setP(P);
+					imgpub.publish(imagemess);
+					caminfopub.publish(caminfomsg);
+					//System.out.println("Pub cam:"+imagemess);
+					sequenceNumber++;
+				}
 			}
+			Thread.sleep(10);
+			
 			synchronized(navMutex) {
 				str.setX(phi);
 				str.setY(theta);
@@ -309,6 +304,8 @@ public void onStart(final ConnectedNode connectedNode) {
 				navpub.publish(str);
 				//System.out.println("Pub nav:"+str);
 			}
+			Thread.sleep(10);
+			
 			synchronized(rngMutex) {
 				rangemsg.setFieldOfView(30);
 				rangemsg.setMaxRange(600);
@@ -318,8 +315,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				rangepub.publish(rangemsg);
 				//System.out.println("Pub range:"+rangemsg);
 			}
-			sequenceNumber++;
-			Thread.sleep(50);
+			Thread.sleep(10);
 		}
 	});  
 
