@@ -10,6 +10,7 @@
 package org.ros.ardrone;
 
 import java.awt.image.BufferedImage;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
@@ -39,19 +40,19 @@ import de.yadrone.base.navdata.listener.AttitudeListener;
 public class ardrone_air extends AbstractNodeMain  {
 
 	IARDrone drone;
-	double phi, theta, gaz, psi;
+	double phi, theta, psi;
 	int range;
-	byte[] bbuf = new byte[320*240*3];
+	byte[] bbuf;
 	boolean landed = true;
 	boolean videohoriz = true;
 	boolean emergency = false;
 	double pitch, roll, yaw, vertvel;
 	Time tst;
 	int imwidth = 320, imheight = 240;
-	int[] rgbArray = new int[imwidth*imheight];
 	Object vidMutex = new Object(); 
 	Object navMutex = new Object();
 	Object rngMutex = new Object();
+
 
 @Override
 public GraphName getDefaultNodeName() {
@@ -91,7 +92,9 @@ public void onStart(final ConnectedNode connectedNode) {
 
 			public void attitudeUpdated(float pitch, float roll) { 
 				synchronized(navMutex) {
-					System.out.println("Pitch: " + pitch + " Roll: " + roll);
+					//System.out.println("Pitch: " + pitch + " Roll: " + roll);
+					phi = roll;
+					theta = pitch;
 				}
 			}
 			
@@ -229,14 +232,12 @@ public void onStart(final ConnectedNode connectedNode) {
 			try
 			{
 				drone.move3D(-(int)roll, -(int)pitch, (int)vertvel, -(int)yaw);
-			}
-			catch (Throwable e)
-			{
+			} catch (Throwable e) {
 				e.printStackTrace();
 			}
-				log.debug("Drone commands: " + roll + " " + pitch + " " + vertvel + " " + yaw);        
-			}
+			log.debug("Drone commands: " + roll + " " + pitch + " " + vertvel + " " + yaw);        
 		}
+	}
 	});
 
 	// This CancellableLoop will be canceled automatically when the node shuts
@@ -269,36 +270,38 @@ public void onStart(final ConnectedNode connectedNode) {
 			imghead.setStamp(tst);
 			imghead.setFrameId("0");
 			synchronized(vidMutex) {
-				imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
-				imagemess.setEncoding("8UC3");
-				imagemess.setWidth(imwidth);
-				imagemess.setHeight(imheight);
-				imagemess.setStep(imwidth*3);
-				imagemess.setIsBigendian((byte)0);
-				imagemess.setHeader(imghead);
-				imgpub.publish(imagemess);
+				if( bbuf != null ) {
+					imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
+					imagemess.setEncoding("8UC3");
+					imagemess.setWidth(imwidth);
+					imagemess.setHeight(imheight);
+					imagemess.setStep(imwidth*3);
+					imagemess.setIsBigendian((byte)0);
+					imagemess.setHeader(imghead);
+					imgpub.publish(imagemess);
 				
-				caminfomsg.setHeader(imghead);
-				caminfomsg.setWidth(imwidth);
-				caminfomsg.setHeight(imheight);
-				caminfomsg.setDistortionModel("plumb_bob");
-				//caminfomsg.setK(K);
-				//caminfomsg.setP(P);
-				caminfopub.publish(caminfomsg);
+					caminfomsg.setHeader(imghead);
+					caminfomsg.setWidth(imwidth);
+					caminfomsg.setHeight(imheight);
+					caminfomsg.setDistortionModel("plumb_bob");
+					//caminfomsg.setK(K);
+					//caminfomsg.setP(P);
+					caminfopub.publish(caminfomsg);
+				}
 			}
 			Thread.sleep(10);
 			synchronized(navMutex) {
 				str.setX(phi);
 				str.setY(theta);
-				str.setZ(gaz);
+				str.setZ(range);
 				str.setW(psi);
 				navpub.publish(str);
 			}
 			Thread.sleep(10);
 			synchronized(rngMutex) {
-				rangemsg.setFieldOfView(30);
-				rangemsg.setMaxRange(600);
-				rangemsg.setMinRange(6);
+				rangemsg.setFieldOfView(35);
+				rangemsg.setMaxRange(6000);
+				rangemsg.setMinRange(0);
 				rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
 				rangemsg.setRange(range);
 				rangepub.publish(rangemsg);
