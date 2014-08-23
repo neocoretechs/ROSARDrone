@@ -6,11 +6,8 @@
  */
 package org.ros.ardrone;
 
-import java.awt.image.BufferedImage;
-import java.awt.image.WritableRaster;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedDeque;
 
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
@@ -29,22 +26,21 @@ import de.yadrone.base.IDrone;
 import de.yadrone.base.navdata.accel.AcceleroPhysData;
 import de.yadrone.base.navdata.accel.AcceleroRawData;
 import de.yadrone.base.navdata.data.Altitude;
-import de.yadrone.base.navdata.data.GyroPhysData;
-import de.yadrone.base.navdata.data.GyroRawData;
+
 import de.yadrone.base.navdata.data.KalmanPressureData;
 import de.yadrone.base.navdata.data.MagnetoData;
 import de.yadrone.base.navdata.data.Pressure;
-import de.yadrone.base.navdata.data.RawData;
+
 import de.yadrone.base.navdata.data.Temperature;
 import de.yadrone.base.navdata.listener.AcceleroListener;
 import de.yadrone.base.navdata.listener.AltitudeListener;
 import de.yadrone.base.navdata.listener.AttitudeListener;
-import de.yadrone.base.navdata.listener.GyroListener;
+
 import de.yadrone.base.navdata.listener.MagnetoListener;
 import de.yadrone.base.navdata.listener.PressureListener;
-import de.yadrone.base.navdata.listener.RawDataListener;
+
 import de.yadrone.base.navdata.listener.TemperatureListener;
-import de.yadrone.base.navdata.listener.VelocityListener;
+
 
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
@@ -75,9 +71,8 @@ public class ardrone_land extends AbstractNodeMain  {
 	public static long lastPressureNotification = 0; // time so we dont just keep yapping about the weather
 	public static int TEMPERATURE_THRESHOLD = 50000; // C*1000 122F
 	public static boolean isTemperature = false;
+	public static boolean isMoving = false;
 	
-
-
 @Override
 public GraphName getDefaultNodeName() {
 	return GraphName.of("ardrone");
@@ -359,8 +354,14 @@ public void onStart(final ConnectedNode connectedNode) {
 	});
 	
 	/**
-	 * Extract the linear and angular components from cmd_vel topic, take the linear X (pitch) and
-	 * angular Z (yaw) and send them to motor control
+	 * Extract the linear and angular components from cmd_vel topic Twist quaternions, take the linear X (pitch) and
+	 * angular Z (yaw) and send them to motor control. This results in motion planning computing a turn which
+	 * involves rotation about a point in space located at a distance related to speed and angular velocity. The distance
+	 * is used to compute the radius of the arc segment traversed by the wheel track to make the turn. If not moving we can
+	 * make the distance 0 and rotate about a point in space, otherwise we must inscribe an appropriate arc. The distance
+	 * in that case is the linear travel, otherwise the distance is the diameter of the arc segment.
+	 * If we get commands on the cmd_vel topic we assume we are moving, if we do not get the corresponding IMU readings, we have a problem
+	 * If we get a 0,0 on the X,yaw move we stop. If we dont see stable IMU again we have a problem, Houston.
 	 */
 	subscriber.addMessageListener(new MessageListener<geometry_msgs.Twist>() {
 	@Override
@@ -373,6 +374,10 @@ public void onStart(final ConnectedNode connectedNode) {
 			vertvel = val.getZ();
 			val = message.getAngular();
 			yaw = val.getZ();
+			if( pitch == 0.0 && yaw == 0.0 )
+				isMoving = false;
+			else
+				isMoving = true;
 			try
 			{
 				((IARDroneLand)drone).move2D((int)pitch, (float) yaw);
@@ -380,7 +385,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				e.printStackTrace();
 			}  
 		}
-		log.debug("Drone commands: " + pitch + " " + yaw);
+		log.debug("Robot commanded to move:" + pitch + "mm linear in orientation " + yaw);
 	}
 	});
 
@@ -460,7 +465,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			
 			if( isShock || isMag || isPressure || isTemperature ) {
 				diagnostic_msgs.DiagnosticStatus statmsg = statpub.newMessage();
-				if(isShock) {
+				if(isShock && !isMoving) {
 					isShock = false;
 					statmsg.setName("shock");
 					statmsg.setLevel(diagnostic_msgs.DiagnosticStatus.WARN);
