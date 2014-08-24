@@ -74,7 +74,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	final Publisher<sensor_msgs.Range> rangepub = 
-			connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);		
+			connectedNode.newPublisher("ardrone/rangeTop", sensor_msgs.Range._TYPE);		
 	try{
 		drone = (IARDrone)AbstractConfigFactory.createFactory("Air").createDrone();
 		drone.getNavDataManager().addAttitudeListener(new AttitudeListener() {

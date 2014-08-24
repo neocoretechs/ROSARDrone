@@ -20,27 +20,23 @@ import org.ros.node.topic.Subscriber;
 import org.ros.message.Time;
 import org.jboss.netty.buffer.ChannelBuffers;
 
+import sensor_msgs.Range;
 import de.yadrone.base.AbstractConfigFactory;
 import de.yadrone.base.IARDroneLand;
 import de.yadrone.base.IDrone;
 import de.yadrone.base.navdata.accel.AcceleroPhysData;
 import de.yadrone.base.navdata.accel.AcceleroRawData;
 import de.yadrone.base.navdata.data.Altitude;
-
 import de.yadrone.base.navdata.data.KalmanPressureData;
 import de.yadrone.base.navdata.data.MagnetoData;
 import de.yadrone.base.navdata.data.Pressure;
-
 import de.yadrone.base.navdata.data.Temperature;
 import de.yadrone.base.navdata.listener.AcceleroListener;
 import de.yadrone.base.navdata.listener.AltitudeListener;
 import de.yadrone.base.navdata.listener.AttitudeListener;
-
 import de.yadrone.base.navdata.listener.MagnetoListener;
 import de.yadrone.base.navdata.listener.PressureListener;
-
 import de.yadrone.base.navdata.listener.TemperatureListener;
-
 
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
@@ -50,19 +46,20 @@ public class ardrone_land extends AbstractNodeMain  {
 
 	IDrone drone;
 	double phi, theta, psi;
-	int range;
+	int rangeTop, rangeBottom; // Ultrasonic sensors, one is external to ARDrone and sits on the bus as robocore/range
 	byte[] bbuf;// = new byte[320*240*3];
 	boolean started = true;
 	boolean videohoriz = true;
 	boolean emergency = false;
 	double pitch, roll, yaw, vertvel;
+	float[] accs; // accelerometer values
 	Time tst;
 	int imwidth = 672, imheight = 418;
 	Object vidMutex = new Object(); 
 	Object navMutex = new Object();
 	Object rngMutex = new Object();
 	public static float[] SHOCK_BASELINE = { 971.0f, 136.0f, 36.0f};
-	public static float[] SHOCK_THRESHOLD = {100.0f,100.0f,100.0f}; // deltas. 971, 136, 36 relatively normal values. seismic: last value swings from range -40 to 140
+	public static float[] SHOCK_THRESHOLD = {100.0f,100.0f,100.0f}; // deltas. 971, 136, 36 relatively normal values. seismic: last value swings from rangeTop -40 to 140
 	public static boolean isShock = false;
 	public static short[] MAG_THRESHOLD = {-1,-1,-1};
 	public static boolean isMag = false;
@@ -85,6 +82,8 @@ public void onStart(final ConnectedNode connectedNode) {
 	Subscriber<std_msgs.Empty> substol = connectedNode.newSubscriber("ardrone/activate", std_msgs.Empty._TYPE);
 	Subscriber<std_msgs.Empty> subsreset = connectedNode.newSubscriber("ardrone/reset", std_msgs.Empty._TYPE);
 	Subscriber<std_msgs.Empty> subschannel = connectedNode.newSubscriber("ardrone/zap", std_msgs.Empty._TYPE);
+	Subscriber<sensor_msgs.Range> subsrange = connectedNode.newSubscriber("robocore/rangeTop", sensor_msgs.Range._TYPE);
+	
 	final Publisher<geometry_msgs.Quaternion> navpub =
 		connectedNode.newPublisher("ardrone/navdata", geometry_msgs.Quaternion._TYPE);
 	final Publisher<sensor_msgs.Image> imgpub =
@@ -92,7 +91,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	final Publisher<sensor_msgs.Range> rangepub = 
-		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
+		connectedNode.newPublisher("ardrone/rangeTop", sensor_msgs.Range._TYPE);
 	final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
 			connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
 
@@ -117,7 +116,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					phi = roll;
 					theta = pitch;
 					//System.out.println("Pitch: " + pitch + " Roll: " + roll);
-					((IARDroneLand)drone).move2D((int)phi,(float) theta);
+					//((IARDroneLand)drone).move2D((int)phi,(float) theta);
 				}
 			}
 			
@@ -133,7 +132,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				synchronized(rngMutex) {
 					//System.out.println("Ext. Alt.:"+ud);
 					if( ud.getRaw() != 0 )
-						range = ud.getRaw();
+						rangeTop = ud.getRaw();
 				}
 			}
 			@Override
@@ -141,7 +140,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				synchronized(rngMutex) {
 					//System.out.println("Altitude: "+altitude);
 					if( altitude != 0 ) {
-						range = altitude;
+						rangeTop = altitude;
 					}
 				}
 			}
@@ -200,20 +199,22 @@ public void onStart(final ConnectedNode connectedNode) {
 
 			@Override
 			public void receivedPhysData(AcceleroPhysData d) {
-				float[] accs = d.getPhysAccs();
-				//System.out.println("Shock:"+accs[0]+" "+accs[1]+" "+accs[2]);
-				if( SHOCK_THRESHOLD[0] != -1 ) {
-					if( Math.abs(accs[0]-SHOCK_BASELINE[0]) > SHOCK_THRESHOLD[0] ) {
-						isShock = true;
-						return;
-					}
-					if( Math.abs(accs[1]-SHOCK_BASELINE[1]) > SHOCK_THRESHOLD[1] ) {
-						isShock = true;
-						return;
-					}
-					if( Math.abs(accs[2]-SHOCK_BASELINE[2]) > SHOCK_THRESHOLD[2] ) {
-						isShock = true;
-						return;
+				synchronized(accs) {
+					accs = d.getPhysAccs();
+					//System.out.println("Shock:"+accs[0]+" "+accs[1]+" "+accs[2]);
+					if( SHOCK_THRESHOLD[0] != -1 ) {
+						if( Math.abs(accs[0]-SHOCK_BASELINE[0]) > SHOCK_THRESHOLD[0] ) {
+							isShock = true;
+							return;
+						}
+						if( Math.abs(accs[1]-SHOCK_BASELINE[1]) > SHOCK_THRESHOLD[1] ) {
+							isShock = true;
+							return;
+						}
+						if( Math.abs(accs[2]-SHOCK_BASELINE[2]) > SHOCK_THRESHOLD[2] ) {
+							isShock = true;
+							return;
+						}
 					}
 				}
 				//System.out.println("Phys Accelero:"+d);
@@ -368,29 +369,46 @@ public void onStart(final ConnectedNode connectedNode) {
 	public void onNewMessage(geometry_msgs.Twist message) {
 		geometry_msgs.Vector3 val = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Vector3._TYPE);
 		val = message.getLinear();
-		synchronized(navMutex) {
-			roll = val.getY();
-			pitch = val.getX();
-			vertvel = val.getZ();
-			val = message.getAngular();
-			yaw = val.getZ();
-			if( pitch == 0.0 && yaw == 0.0 )
+		float targetRoll = (float) val.getY();
+		float targetPitch = (float) val.getX();
+		float targetVertvel = (float) val.getZ();
+		val = message.getAngular();
+		float targetYaw = (float) val.getZ();
+		if( pitch == 0.0 && yaw == 0.0 )
 				isMoving = false;
-			else
+		else
 				isMoving = true;
-			try
-			{
-				((IARDroneLand)drone).move2D((int)pitch, (float) yaw);
-			} catch (Throwable e) {
+		try
+		{
+			//move2D(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime)
+			float taccs[];
+			synchronized(accs) {
+				taccs = accs.clone();
+			}
+			for(int i = 0; i < 3; i++)taccs[i] = Math.abs(taccs[i]-SHOCK_BASELINE[i]);
+			int ranges[] = new int[2];
+			ranges[0] = rangeTop;
+			ranges[1] = rangeBottom;
+			((IARDroneLand)drone).move2DRelative((float)yaw , (int)targetYaw, (int)targetPitch, 1, taccs, ranges);
+		} catch (Throwable e) {
 				e.printStackTrace();
-			}  
-		}
+		}  
 		log.debug("Robot commanded to move:" + pitch + "mm linear in orientation " + yaw);
 	}
 	});
 
-	// This CancellableLoop will be canceled automatically when the node shuts
-	// down.
+	subsrange.addMessageListener(new MessageListener<sensor_msgs.Range>() {
+		@Override
+		public void onNewMessage(Range message) {
+			rangeBottom = (int) message.getRange();
+		}
+	});
+	
+	/**
+	 * Main publishing loop. Essentially we are publishing the data in whatever state its in, using the
+	 * mutex appropriate to establish critical sections. A 10ms sleep follows each publication to keep the bus arbitrated
+	 * This CancellableLoop will be canceled automatically when the node shuts down
+	 */
 	connectedNode.executeCancellableLoop(new CancellableLoop() {
 		private int sequenceNumber;
 
@@ -444,7 +462,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				geometry_msgs.Quaternion str = navpub.newMessage();
 				str.setX(phi);
 				str.setY(theta);
-				str.setZ(range); // gaz
+				str.setZ(rangeTop); // gaz
 				str.setW(psi);
 				navpub.publish(str);
 				//System.out.println("Pub nav:"+str);
@@ -457,9 +475,9 @@ public void onStart(final ConnectedNode connectedNode) {
 				rangemsg.setMaxRange(6000);
 				rangemsg.setMinRange(0);
 				rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
-				rangemsg.setRange(range);
+				rangemsg.setRange(rangeTop);
 				rangepub.publish(rangemsg);
-				//System.out.println("Pub range:"+rangemsg);
+				//System.out.println("Pub rangeTop:"+rangemsg);
 			}
 			Thread.sleep(10);
 			
@@ -478,7 +496,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					Thread.sleep(10);
 				}
 			
-				if(isMag) {
+				if(isMag && !isMoving) {
 					isMag = false;
 					statmsg.setName("magnetic");
 					statmsg.setLevel(diagnostic_msgs.DiagnosticStatus.WARN);
