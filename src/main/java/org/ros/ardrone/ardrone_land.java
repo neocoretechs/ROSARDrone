@@ -22,7 +22,6 @@ import org.jboss.netty.buffer.ChannelBuffers;
 
 import sensor_msgs.Range;
 import de.yadrone.base.AbstractConfigFactory;
-import de.yadrone.base.IARDroneLand;
 import de.yadrone.base.IDrone;
 import de.yadrone.base.navdata.accel.AcceleroPhysData;
 import de.yadrone.base.navdata.accel.AcceleroRawData;
@@ -58,6 +57,8 @@ public class ardrone_land extends AbstractNodeMain  {
 	Object vidMutex = new Object(); 
 	Object navMutex = new Object();
 	Object rngMutex = new Object();
+	MotorControlInterface2D motorControlListener;
+
 	public static float[] SHOCK_BASELINE = { 971.0f, 136.0f, 36.0f};
 	public static float[] SHOCK_THRESHOLD = {100.0f,100.0f,100.0f}; // deltas. 971, 136, 36 relatively normal values. seismic: last value swings from rangeTop -40 to 140
 	public static boolean isShock = false;
@@ -74,7 +75,13 @@ public class ardrone_land extends AbstractNodeMain  {
 public GraphName getDefaultNodeName() {
 	return GraphName.of("ardrone");
 }
+public MotorControlInterface2D getMotorControlListener() {
+	return motorControlListener;
+}
 
+public void setMotorControlListener(MotorControlInterface2D motorControlListener) {
+	this.motorControlListener = motorControlListener;
+}
 @Override
 public void onStart(final ConnectedNode connectedNode) {
 	final Log log = connectedNode.getLog();
@@ -389,7 +396,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			int ranges[] = new int[2];
 			ranges[0] = rangeTop;
 			ranges[1] = rangeBottom;
-			((IARDroneLand)drone).move2DRelative((float)yaw , (int)targetYaw, (int)targetPitch, 1, taccs, ranges);
+			motorControlListener.move2DRelative((float)yaw , (int)targetYaw, (int)targetPitch, 1, taccs, ranges);
 		} catch (Throwable e) {
 				e.printStackTrace();
 		}  
@@ -420,8 +427,7 @@ public void onStart(final ConnectedNode connectedNode) {
 		@Override
 		protected void loop() throws InterruptedException {
 			std_msgs.Header imghead = connectedNode.getTopicMessageFactory().newFromType(std_msgs.Header._TYPE);
-
-			
+	
 			//So far I've been unable to figure out how to fill the K and P matrices
 			//using rosjava --J.Pablo
 			//double[] K = {imwidth/2.0, 0, imwidth/2.0, 0, 160, 120, 0, 0, 1};
