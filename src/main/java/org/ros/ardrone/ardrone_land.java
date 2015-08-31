@@ -23,20 +23,32 @@ import org.jboss.netty.buffer.ChannelBuffers;
 import sensor_msgs.Range;
 import de.yadrone.base.AbstractConfigFactory;
 import de.yadrone.base.IDrone;
+import de.yadrone.base.command.misc.DetectionType;
+import de.yadrone.base.command.vision.VisionTagType;
 import de.yadrone.base.navdata.accel.AcceleroPhysData;
 import de.yadrone.base.navdata.accel.AcceleroRawData;
 import de.yadrone.base.navdata.data.Altitude;
+import de.yadrone.base.navdata.data.GyroPhysData;
+import de.yadrone.base.navdata.data.GyroRawData;
 import de.yadrone.base.navdata.data.KalmanPressureData;
 import de.yadrone.base.navdata.data.MagnetoData;
 import de.yadrone.base.navdata.data.Pressure;
 import de.yadrone.base.navdata.data.Temperature;
+import de.yadrone.base.navdata.data.TrackerData;
 import de.yadrone.base.navdata.listener.AcceleroListener;
 import de.yadrone.base.navdata.listener.AltitudeListener;
 import de.yadrone.base.navdata.listener.AttitudeListener;
+import de.yadrone.base.navdata.listener.GyroListener;
 import de.yadrone.base.navdata.listener.MagnetoListener;
 import de.yadrone.base.navdata.listener.PressureListener;
 import de.yadrone.base.navdata.listener.TemperatureListener;
+import de.yadrone.base.navdata.listener.VisionListener;
+import de.yadrone.base.navdata.vision.VisionData;
+import de.yadrone.base.navdata.vision.VisionPerformance;
+import de.yadrone.base.navdata.vision.VisionTag;
 
+import com.neocoretechs.robocore.MotionController;
+import com.neocoretechs.robocore.MotorControl;
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
 import com.twilight.h264.player.RGBListener;
@@ -44,23 +56,35 @@ import com.twilight.h264.player.RGBListener;
 public class ardrone_land extends AbstractNodeMain  {
 
 	IDrone drone;
-	double phi, theta, psi;
+	//double phi, theta, psi;
 	int rangeTop, rangeBottom; // Ultrasonic sensors, one is external to ARDrone and sits on the bus as robocore/range
 	byte[] bbuf;// = new byte[320*240*3];
 	boolean started = true;
 	boolean videohoriz = true;
 	boolean emergency = false;
-	double pitch, roll, yaw, vertvel;
-	float[] accs; // accelerometer values
+
+	double pitch = 0.0d;
+	double roll = 0.0d;
+	double yaw = 0.0d;
+	double vertvel = 0.0d;
+	double phi = 0.0d;
+	double theta = 0.0d;
+	
+	float[] accs = new float[3]; // accelerometer values
+	float gyros[] = new float[3]; // gyro
+	int visionDistance, visionAngle, visionX, visionY;
 	Time tst;
 	int imwidth = 672, imheight = 418;
+	
+	NavListenerMotorControlInterface navListener = null;
+	
 	Object vidMutex = new Object(); 
 	Object navMutex = new Object();
 	Object rngMutex = new Object();
-	MotorControlInterface2D motorControlListener;
+	Object visMutex = new Object();
 
 	public static float[] SHOCK_BASELINE = { 971.0f, 136.0f, 36.0f};
-	public static float[] SHOCK_THRESHOLD = {100.0f,100.0f,100.0f}; // deltas. 971, 136, 36 relatively normal values. seismic: last value swings from rangeTop -40 to 140
+	public static float[] SHOCK_THRESHOLD = {1000.0f,1000.0f,1000.0f}; // deltas. 971, 136, 36 relatively normal values. seismic: last value swings from rangeTop -40 to 140
 	public static boolean isShock = false;
 	public static short[] MAG_THRESHOLD = {-1,-1,-1};
 	public static boolean isMag = false;
@@ -70,26 +94,21 @@ public class ardrone_land extends AbstractNodeMain  {
 	public static int TEMPERATURE_THRESHOLD = 50000; // C*1000 122F
 	public static boolean isTemperature = false;
 	public static boolean isMoving = false;
+	public static boolean isVision = false; // machine vision recognition event
 	
 @Override
 public GraphName getDefaultNodeName() {
 	return GraphName.of("ardrone");
 }
-public MotorControlInterface2D getMotorControlListener() {
-	return motorControlListener;
-}
 
-public void setMotorControlListener(MotorControlInterface2D motorControlListener) {
-	this.motorControlListener = motorControlListener;
-}
 @Override
 public void onStart(final ConnectedNode connectedNode) {
 	final Log log = connectedNode.getLog();
-	Subscriber<geometry_msgs.Twist> subscriber = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
+	Subscriber<geometry_msgs.Twist> subsmotion = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
 	Subscriber<std_msgs.Empty> substol = connectedNode.newSubscriber("ardrone/activate", std_msgs.Empty._TYPE);
 	Subscriber<std_msgs.Empty> subsreset = connectedNode.newSubscriber("ardrone/reset", std_msgs.Empty._TYPE);
 	Subscriber<std_msgs.Empty> subschannel = connectedNode.newSubscriber("ardrone/zap", std_msgs.Empty._TYPE);
-	Subscriber<sensor_msgs.Range> subsrange = connectedNode.newSubscriber("robocore/rangeTop", sensor_msgs.Range._TYPE);
+	Subscriber<sensor_msgs.Range> subsrange = connectedNode.newSubscriber("robocore/range", sensor_msgs.Range._TYPE);
 	
 	final Publisher<geometry_msgs.Quaternion> navpub =
 		connectedNode.newPublisher("ardrone/navdata", geometry_msgs.Quaternion._TYPE);
@@ -98,32 +117,39 @@ public void onStart(final ConnectedNode connectedNode) {
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	final Publisher<sensor_msgs.Range> rangepub = 
-		connectedNode.newPublisher("ardrone/rangeTop", sensor_msgs.Range._TYPE);
+		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
 	final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
 			connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
 
-	
 	try{
 		drone = (IDrone)AbstractConfigFactory.createFactory("Land").createDrone();
+		//setMotorControlListener(MotionController.getInstance());
+		navListener = new NavListenerMotorControl();
+		
 		drone.getNavDataManager().addAttitudeListener(new AttitudeListener() {
-			
-			public void attitudeUpdated(float pitch, float roll, float yaw)
+			// theta phi psi
+			public void attitudeUpdated(float tpitch, float troll, float tyaw)
 			{
 				synchronized(navMutex) {
 					//System.out.println("Pitch: " + pitch + " Roll: " + roll + " Yaw: " + yaw);
-					phi = roll;
-					theta = pitch;
+					phi = troll;
+					theta = tpitch;
 					//gaz = nd.getAltitude();
-					psi = yaw;
+					//psi = yaw;
+					//pitch = tpitch;
+					//roll = troll;
+					yaw = tyaw;
 				}
 			}
-
-			public void attitudeUpdated(float pitch, float roll) { 
+			// these are the euler angles vs raw data above
+			public void attitudeUpdated(float tpitch, float troll) { 
 				synchronized(navMutex) {
-					phi = roll;
-					theta = pitch;
+					//phi = roll;
+					//theta = pitch;
 					//System.out.println("Pitch: " + pitch + " Roll: " + roll);
 					//((IARDroneLand)drone).move2D((int)phi,(float) theta);
+					pitch = tpitch;
+					roll = troll;
 				}
 			}
 			
@@ -169,7 +195,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	    });
 	
 		/*
-		drone.getNavDataManager().addBatteryListener(new BatteryListener() {	
+		drone.getNavDataManager().addBatteryListener(new NavListenerMotorControl() {	
 			public void batteryLevelChanged(int percentage)
 			{
 				System.out.println("Battery: " + percentage + " %");
@@ -177,7 +203,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			public void voltageChanged(int vbat_raw) { }
 		});
 		*/
-		/*
+		
 		drone.getNavDataManager().addGyroListener(new GyroListener() {
 			@Override
 			public void receivedRawData(GyroRawData d) {
@@ -185,8 +211,10 @@ public void onStart(final ConnectedNode connectedNode) {
 			}
 			@Override
 			public void receivedPhysData(GyroPhysData d) {
-				//System.out.println("GyroPhys:"+d);
-				
+				synchronized(gyros) {
+					gyros = d.getPhysGyros();
+				}
+				//System.out.println("GyroPhys:"+d);	
 			}
 			@Override
 			public void receivedOffsets(float[] offset_g) {
@@ -196,7 +224,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			}
 	
 		});
-		*/
+		
 	    
 		drone.getNavDataManager().addAcceleroListener(new AcceleroListener() {
 			@Override
@@ -282,6 +310,85 @@ public void onStart(final ConnectedNode connectedNode) {
 				}
 			}
 		});
+		/**
+		 * Machine vision is enabled. When messages come where we must multiples them
+		 * tagsDetected get array of VisionTag. getSource() returns a DetectionType where values
+		 * cmdsuf is 'detections_select_h' dtname is 'HORIZONTAL'
+		 */
+		drone.getNavDataManager().addVisionListener( new VisionListener() {
+			@Override
+			public void tagsDetected(VisionTag[] tags) {
+				synchronized(visMutex) {
+				for(VisionTag vt : tags ) {
+					visionDistance = vt.getDistance();
+					visionAngle = (int) vt.getOrientationAngle();
+					// 0,0 top left 1000,1000 right bottom regardless of camera
+					visionX = vt.getX();
+					visionY = vt.getY();
+					//DetectionType dt = vt.getSource();
+					//String cmdsuf = dt.getCmdSuffix();
+					//String dtname = dt.name();
+					// CadType.H_ORIENTED_COCARDE 
+					// The following lines fail to work
+					// int vta = vt.getType();
+					// if( VisionTagType.fromInt(vta) == VisionTagType.ORIENTED_ROUNDEL)
+					//	System.out.println("My toy!");
+					//if( visionDistance < 500 ) {
+					//System.out.println("Marker "+vt);
+					isVision = true;
+					break;
+					//}
+				}
+				}	
+			}
+			
+			@Override
+			public void trackersSend(TrackerData trackersData) {
+				//System.out.println("TrackerData:"+trackersData);
+				/*
+				int[][][] d3 = trackersData.getTrackers();
+				for( int i = 0; i < d3.length; i++) {
+					for(int j = 0; j < d3[i].length; j++) {
+						System.out.println(d3[i][j][0]+" "+d3[i][j][1]+" "+d3[i][j][2]);
+					}					
+				}
+				*/	
+			}
+			
+			@Override
+			public void receivedPerformanceData(VisionPerformance d) {
+				//System.out.println("Perf data:"+d);
+				
+			}
+			@Override
+			public void receivedRawData(float[] vision_raw) {
+				//System.out.println("Vision Raw:"+vision_raw);
+				//for(float vis: vision_raw)
+				//	System.out.println("raw vis:"+vis);
+			}
+			@Override
+			public void receivedData(VisionData d) {
+				//int alt = d.getAltitudeCapture();
+				//System.out.println("Vision data range:"+alt+" angles:"+d.getPhiCapture()+" t:"+d.getThetaCapture()+" psi:"+d.getPsiCapture());
+				//float[] body = d.getBodyV();
+				//for(float bod : body) {
+				//	System.out.println("Body V:"+bod);
+				//}
+			}
+			
+			@Override
+			public void receivedVisionOf(float[] of_dx, float[] of_dy) {
+				//System.out.print("VisionOf:");
+				//for(float of: of_dx) System.out.println(of);
+				//for(float of: of_dy) System.out.println(of);
+			}
+			@Override
+			public void typeDetected(int detection_camera_type) {
+				//System.out.println("Cam:"+detection_camera_type);	
+			}
+			
+		});
+
 
 	} catch(Throwable e) {
 		e.printStackTrace();
@@ -371,36 +478,55 @@ public void onStart(final ConnectedNode connectedNode) {
 	 * If we get commands on the cmd_vel topic we assume we are moving, if we do not get the corresponding IMU readings, we have a problem
 	 * If we get a 0,0 on the X,yaw move we stop. If we dont see stable IMU again we have a problem, Houston.
 	 */
-	subscriber.addMessageListener(new MessageListener<geometry_msgs.Twist>() {
+	subsmotion.addMessageListener(new MessageListener<geometry_msgs.Twist>() {
 	@Override
 	public void onNewMessage(geometry_msgs.Twist message) {
 		geometry_msgs.Vector3 val = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Vector3._TYPE);
 		val = message.getLinear();
-		float targetRoll = (float) val.getY();
 		float targetPitch = (float) val.getX();
-		float targetVertvel = (float) val.getZ();
 		val = message.getAngular();
 		float targetYaw = (float) val.getZ();
-		if( pitch == 0.0 && yaw == 0.0 )
+		float tgyros[], taccs[];
+		float troll, tpitch;
+		int tvisionX,tvisionDist;
+		boolean tisVision;
+		if( targetPitch == 0.0 && targetYaw == 0.0 )
 				isMoving = false;
 		else
 				isMoving = true;
+		synchronized(navMutex) {
+			troll = (float) roll;
+			tpitch = (float) pitch;
+		}
 		try
 		{
 			//move2D(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime)
-			float taccs[];
 			synchronized(accs) {
 				taccs = accs.clone();
+			}
+			synchronized(gyros) {
+				tgyros = gyros.clone();
+			}
+			synchronized(visMutex) {
+				tvisionX = visionX;
+				tvisionDist = visionDistance;
+				tisVision = isVision;
+				isVision = false;
 			}
 			for(int i = 0; i < 3; i++)taccs[i] = Math.abs(taccs[i]-SHOCK_BASELINE[i]);
 			int ranges[] = new int[2];
 			ranges[0] = rangeTop;
 			ranges[1] = rangeBottom;
-			motorControlListener.move2DRelative((float)yaw , (int)targetYaw, (int)targetPitch, 1, taccs, ranges);
+			NavPacket np = new NavPacket(tgyros, taccs, ranges, 
+								tpitch, troll, (int)targetYaw, (int)targetPitch, 1, 
+								tisVision, tvisionX, tvisionDist);
+			navListener.pushData(np);
+	
 		} catch (Throwable e) {
 				e.printStackTrace();
-		}  
-		log.debug("Robot commanded to move:" + pitch + "mm linear in orientation " + yaw);
+		} 
+		System.out.println("Robot commanded to move:" + targetPitch + "mm linear in orientation " + targetYaw+" euler:"+tpitch+" "+troll);
+		log.debug("Robot commanded to move:" + targetPitch + "mm linear in orientation " + targetYaw);
 	}
 	});
 
@@ -466,10 +592,10 @@ public void onStart(final ConnectedNode connectedNode) {
 			
 			synchronized(navMutex) {
 				geometry_msgs.Quaternion str = navpub.newMessage();
-				str.setX(phi);
-				str.setY(theta);
+				str.setX(roll/*phi*/);
+				str.setY(pitch/*theta*/);
 				str.setZ(rangeTop); // gaz
-				str.setW(psi);
+				str.setW(yaw/*psi*/);
 				navpub.publish(str);
 				//System.out.println("Pub nav:"+str);
 			}
@@ -540,8 +666,10 @@ public void onStart(final ConnectedNode connectedNode) {
 					statpub.publish(statmsg);
 					Thread.sleep(10);
 				}
-			}
+			} // isShock, isMag...
+	
 		}
+		
 	}); // cancellable loop
 }
 

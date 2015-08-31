@@ -6,6 +6,6 @@ package org.ros.ardrone;
  *
  */
 public interface MotorControlInterface2D {
-	public void move2DRelative(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime, float[] accelDeltas, int[] ranges);
-	public void move2DAbsolute(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime, float[] accelDeltas, int[] ranges);
+	public boolean move2DRelative(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime, float[] accelDeltas, int[] ranges);
+	public boolean move2DAbsolute(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime, float[] accelDeltas, int[] ranges);
 }
