@@ -258,11 +258,6 @@ public void onStart(final ConnectedNode connectedNode) {
 			sensor_msgs.Image imagemess = imgpub.newMessage();
 			sensor_msgs.CameraInfo caminfomsg = caminfopub.newMessage();
 			sensor_msgs.Range rangemsg = rangepub.newMessage();
-			
-			//So far I've been unable to figure out how to fill the K and P matrices
-			//using rosjava --J.Pablo
-			//double[] K = {imwidth/2.0, 0, imwidth/2.0, 0, 160, 120, 0, 0, 1};
-			//double[] P = {160, 0, 160, 0, 0, 160, 120, 0, 0, 0, 1, 0};
 
 			imghead.setSeq(sequenceNumber);
 			sequenceNumber++;
@@ -289,7 +284,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					caminfopub.publish(caminfomsg);
 				}
 			}
-			Thread.sleep(10);
+			Thread.sleep(1);
 			synchronized(navMutex) {
 				str.setX(phi);
 				str.setY(theta);
@@ -297,7 +292,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				str.setW(psi);
 				navpub.publish(str);
 			}
-			Thread.sleep(10);
+			Thread.sleep(1);
 			synchronized(rngMutex) {
 				rangemsg.setFieldOfView(35);
 				rangemsg.setMaxRange(6000);
@@ -306,7 +301,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				rangemsg.setRange(range);
 				rangepub.publish(rangemsg);
 			}
-			Thread.sleep(10);
+			Thread.sleep(1);
 		}
 	});  
 

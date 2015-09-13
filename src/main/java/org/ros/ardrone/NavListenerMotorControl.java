@@ -8,6 +8,12 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import com.neocoretechs.robocore.MotorControl;
 
 /**
+ * We are using the MotorControl class of RoboCore to control the comm to the motor controller
+ * via the remote RoboCore process that manages serial data transfer.
+ * This nav listener can sit in the drone packet processing chain and wait for NavPacket data
+ * to be pushed down to it. The NavPackets are a fusion of various sensor data form the IMU and ultrasonics.
+ * Once spun up, the thread here will wait for NavPackets to appear on the data array and then pop them for
+ * processing.
  * @author jg
  *
  */
@@ -19,8 +25,8 @@ public class NavListenerMotorControl implements Runnable, NavListenerMotorContro
 	/**
 	 * Thread spins up on construction
 	 */
-	public NavListenerMotorControl() {
-		motorControlListener = new MotorControl();
+	public NavListenerMotorControl(String remoteMotorControlHost) {
+		motorControlListener = new MotorControl(remoteMotorControlHost);
 		ThreadPoolManager.getInstance().spin(this, "SYSTEM");
 	}
 	

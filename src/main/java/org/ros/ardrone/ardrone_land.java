@@ -8,6 +8,7 @@ package org.ros.ardrone;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
@@ -52,7 +53,13 @@ import com.neocoretechs.robocore.MotorControl;
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
 import com.twilight.h264.player.RGBListener;
-
+/**
+ * This class takes a series of messages demuxxed from the ARDrone and remuxxed onto the ROS bus.
+ * In the case of IMU data, NavPacket(s) are constructed in response to cmd_vel topic Twist messages
+ * and ultrasonic and other sensors thusly fused.
+ * @author jg
+ *
+ */
 public class ardrone_land extends AbstractNodeMain  {
 
 	IDrone drone;
@@ -120,11 +127,35 @@ public void onStart(final ConnectedNode connectedNode) {
 		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
 	final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
 			connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
+	final Map<String, String> environment;
+	final String motorControlHost;
 
 	try{
+		/*
+		environment = System.getenv();
+		if( environment.containsKey("MOTORCONTROL") ) {
+			motorControlHost = environment.get("MOTORCONTROL");
+			System.out.println("Establishing motor control host as "+motorControlHost);
+		} else {
+			motorControlHost = "127.0.0.1";
+			System.out.println("Motor control host DEFAULTS TO LOOPBACK");
+		}
+		*/
+		// Look for the __motorcontrol:=host on the special remappings of the command line
+		Map<String,String> remaps = connectedNode.getNodeConfiguration().getCommandLineLoader().getSpecialRemappings();
+		if( remaps.get("__motorcontrol") != null )
+			motorControlHost = remaps.get("__motorcontrol");
+		else
+			motorControlHost = "127.0.0.1";
+		
+		System.out.println("Motor control host set to "+motorControlHost);
+		
 		drone = (IDrone)AbstractConfigFactory.createFactory("Land").createDrone();
+		
+		// Options for control outside of ROS bus:
 		//setMotorControlListener(MotionController.getInstance());
-		navListener = new NavListenerMotorControl();
+		
+		navListener = new NavListenerMotorControl(motorControlHost);
 		
 		drone.getNavDataManager().addAttitudeListener(new AttitudeListener() {
 			// theta phi psi
@@ -445,7 +476,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	public void onNewMessage(std_msgs.Empty message) {
 		try
 		{
-			// image width and height synamimcally set later, these are just setups
+			// image width and height set later, these are just setups
 			synchronized(vidMutex) {
 				if(videohoriz) {
 					drone.setHorizontalCamera();
@@ -539,7 +570,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	
 	/**
 	 * Main publishing loop. Essentially we are publishing the data in whatever state its in, using the
-	 * mutex appropriate to establish critical sections. A 10ms sleep follows each publication to keep the bus arbitrated
+	 * mutex appropriate to establish critical sections. A sleep follows each publication to keep the bus arbitrated
 	 * This CancellableLoop will be canceled automatically when the node shuts down
 	 */
 	connectedNode.executeCancellableLoop(new CancellableLoop() {
@@ -588,7 +619,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					sequenceNumber++;
 			  	}
 			}
-			Thread.sleep(10);
+			Thread.sleep(1);
 			
 			synchronized(navMutex) {
 				geometry_msgs.Quaternion str = navpub.newMessage();
@@ -599,7 +630,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				navpub.publish(str);
 				//System.out.println("Pub nav:"+str);
 			}
-			Thread.sleep(10);
+			Thread.sleep(1);
 			
 			synchronized(rngMutex) {
 				sensor_msgs.Range rangemsg = rangepub.newMessage();
@@ -611,7 +642,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				rangepub.publish(rangemsg);
 				//System.out.println("Pub rangeTop:"+rangemsg);
 			}
-			Thread.sleep(10);
+			Thread.sleep(1);
 			
 			if( isShock || isMag || isPressure || isTemperature ) {
 				diagnostic_msgs.DiagnosticStatus statmsg = statpub.newMessage();
@@ -625,7 +656,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					li.add(kv);
 					statmsg.setValues(li);
 					statpub.publish(statmsg);
-					Thread.sleep(10);
+					Thread.sleep(1);
 				}
 			
 				if(isMag && !isMoving) {
@@ -638,7 +669,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					li.add(kv);
 					statmsg.setValues(li);
 					statpub.publish(statmsg);
-					Thread.sleep(10);
+					Thread.sleep(1);
 				}
 			
 				if(isPressure) {
@@ -651,7 +682,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					li.add(kv);
 					statmsg.setValues(li);
 					statpub.publish(statmsg);
-					Thread.sleep(10);
+					Thread.sleep(1);
 				}
 			
 				if(isTemperature) {
@@ -664,7 +695,7 @@ public void onStart(final ConnectedNode connectedNode) {
 					li.add(kv);
 					statmsg.setValues(li);
 					statpub.publish(statmsg);
-					Thread.sleep(10);
+					Thread.sleep(1);
 				}
 			} // isShock, isMag...
 	
