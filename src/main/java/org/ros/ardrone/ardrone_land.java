@@ -6,9 +6,11 @@
  */
 package org.ros.ardrone;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
@@ -65,7 +67,7 @@ public class ardrone_land extends AbstractNodeMain  {
 	IDrone drone;
 	//double phi, theta, psi;
 	int rangeTop, rangeBottom; // Ultrasonic sensors, one is external to ARDrone and sits on the bus as robocore/range
-	byte[] bbuf;// = new byte[320*240*3];
+	byte[] bbuf = null;// = new byte[320*240*3];
 	boolean started = true;
 	boolean videohoriz = true;
 	boolean emergency = false;
@@ -85,7 +87,8 @@ public class ardrone_land extends AbstractNodeMain  {
 	
 	NavListenerMotorControlInterface navListener = null;
 	
-	Object vidMutex = new Object(); 
+	ArrayBlockingQueue<byte[]> vidbuf = new ArrayBlockingQueue<byte[]>(128);
+	Object vidMutex = new Object();
 	Object navMutex = new Object();
 	Object rngMutex = new Object();
 	Object visMutex = new Object();
@@ -216,12 +219,21 @@ public void onStart(final ConnectedNode connectedNode) {
             	synchronized(vidMutex) {
             		imwidth = newImage.imageWidth;
             		imheight = newImage.imageHeight;
-					int bufferSize = imwidth * imheight * 3;
-					if (bbuf == null || bufferSize != bbuf.length) {
-						bbuf = new byte[bufferSize];
-					}
-					FrameUtils.YUV2RGB(newImage, bbuf); // RGBA32 to BGR8
             	}
+				int bufferSize = imwidth * imheight * 3;
+				//if (bbuf == null || bufferSize != bbuf.capacity()) {
+				//		bbuf = ByteBuffer.allocate(bufferSize);
+				//}
+				if( bbuf == null )
+					bbuf = new byte[bufferSize];
+				FrameUtils.YUV2RGB(newImage, bbuf); // RGBA32 to BGR8
+				try {
+					vidbuf.add(bbuf);
+				} catch(IllegalStateException ise) {
+					// buffer full;
+					System.out.println("Video buffer full!");
+					//vidbuf.clear();
+				}
             }
 	    });
 	
@@ -594,54 +606,57 @@ public void onStart(final ConnectedNode connectedNode) {
 			tst = connectedNode.getCurrentTime();
 			imghead.setStamp(tst);
 			imghead.setFrameId("0");
-			
-			synchronized(vidMutex) {
-			  	if( bbuf != null ) {
-					sensor_msgs.Image imagemess = imgpub.newMessage();
-            		//System.out.println("Image:"+newImage.imageWidth+","+newImage.imageHeight+" queue:"+list.size());
-					imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
-					imagemess.setEncoding("8UC3");
-					imagemess.setWidth(imwidth);
-					imagemess.setHeight(imheight);
-					imagemess.setStep(imwidth*3);
-					imagemess.setIsBigendian((byte)0);
-					imagemess.setHeader(imghead);
-					sensor_msgs.CameraInfo caminfomsg = caminfopub.newMessage();
-					caminfomsg.setHeader(imghead);
-					caminfomsg.setWidth(imwidth);
-					caminfomsg.setHeight(imheight);
-					caminfomsg.setDistortionModel("plumb_bob");
-					//caminfomsg.setK(K);
-					//caminfomsg.setP(P);
-					imgpub.publish(imagemess);
-					caminfopub.publish(caminfomsg);
-					//System.out.println("Pub cam:"+imagemess);
-					sequenceNumber++;
-			  	}
+
+			//if( bbuf != null ) {
+			byte[] bbuf = vidbuf.poll();
+			if( bbuf != null ) {
+				sensor_msgs.Image imagemess = imgpub.newMessage();
+				sensor_msgs.CameraInfo caminfomsg = caminfopub.newMessage();
+            	//System.out.println("Image:"+newImage.imageWidth+","+newImage.imageHeight+" queue:"+list.size());
+				imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
+				imagemess.setEncoding("8UC3");
+				synchronized(vidMutex) {
+						imagemess.setWidth(imwidth);
+						imagemess.setHeight(imheight);
+						imagemess.setStep(imwidth*3);
+						imagemess.setIsBigendian((byte)0);
+						imagemess.setHeader(imghead);
+						//
+						caminfomsg.setHeader(imghead);
+						caminfomsg.setWidth(imwidth);
+						caminfomsg.setHeight(imheight);
+						caminfomsg.setDistortionModel("plumb_bob");
+				}
+				//caminfomsg.setK(K);
+				//caminfomsg.setP(P);
+				imgpub.publish(imagemess);
+				caminfopub.publish(caminfomsg);
+				//System.out.println("Pub cam:"+imagemess);
+				sequenceNumber++;	  	
 			}
 			Thread.sleep(1);
 			
+			geometry_msgs.Quaternion str = navpub.newMessage();
 			synchronized(navMutex) {
-				geometry_msgs.Quaternion str = navpub.newMessage();
 				str.setX(roll/*phi*/);
 				str.setY(pitch/*theta*/);
 				str.setZ(rangeTop); // gaz
 				str.setW(yaw/*psi*/);
-				navpub.publish(str);
-				//System.out.println("Pub nav:"+str);
 			}
+			navpub.publish(str);
+			//System.out.println("Pub nav:"+str);
 			Thread.sleep(1);
 			
+			sensor_msgs.Range rangemsg = rangepub.newMessage();
+			rangemsg.setFieldOfView(35);
+			rangemsg.setMaxRange(6000);
+			rangemsg.setMinRange(0);
+			rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
 			synchronized(rngMutex) {
-				sensor_msgs.Range rangemsg = rangepub.newMessage();
-				rangemsg.setFieldOfView(35);
-				rangemsg.setMaxRange(6000);
-				rangemsg.setMinRange(0);
-				rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
-				rangemsg.setRange(rangeTop);
-				rangepub.publish(rangemsg);
-				//System.out.println("Pub rangeTop:"+rangemsg);
+					rangemsg.setRange(rangeTop);
 			}
+			rangepub.publish(rangemsg);
+			//System.out.println("Pub rangeTop:"+rangemsg);
 			Thread.sleep(1);
 			
 			if( isShock || isMag || isPressure || isTemperature ) {
