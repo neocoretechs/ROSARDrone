@@ -66,7 +66,7 @@ public class ardrone_land extends AbstractNodeMain  {
 
 	IDrone drone;
 	//double phi, theta, psi;
-	int rangeTop, rangeBottom; // Ultrasonic sensors, one is external to ARDrone and sits on the bus as robocore/range
+	geometry_msgs.Point32 rangeTop, rangeBottom; // Ultrasonic sensors, one is external to ARDrone and sits on the bus as robocore/range
 	byte[] bbuf = null;// = new byte[320*240*3];
 	boolean started = true;
 	boolean videohoriz = true;
@@ -78,14 +78,14 @@ public class ardrone_land extends AbstractNodeMain  {
 	double vertvel = 0.0d;
 	double phi = 0.0d;
 	double theta = 0.0d;
+	double psi = 0.0d;
 	
 	float[] accs = new float[3]; // accelerometer values
 	float gyros[] = new float[3]; // gyro
 	int visionDistance, visionAngle, visionX, visionY;
 	Time tst;
 	int imwidth = 672, imheight = 418;
-	
-	NavListenerMotorControlInterface navListener = null;
+
 	
 	ArrayBlockingQueue<byte[]> vidbuf = new ArrayBlockingQueue<byte[]>(128);
 	Object vidMutex = new Object();
@@ -111,54 +111,45 @@ public GraphName getDefaultNodeName() {
 	return GraphName.of("ardrone");
 }
 
+/**
+ * Start the main processing pipeline
+ */
 @Override
 public void onStart(final ConnectedNode connectedNode) {
+	rangeTop = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Point32._TYPE);
+	rangeBottom = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Point32._TYPE);	
 	final Log log = connectedNode.getLog();
-	Subscriber<geometry_msgs.Twist> subsmotion = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
+	//Subscriber<geometry_msgs.Twist> subsmotion = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
 	Subscriber<std_msgs.Empty> substol = connectedNode.newSubscriber("ardrone/activate", std_msgs.Empty._TYPE);
 	Subscriber<std_msgs.Empty> subsreset = connectedNode.newSubscriber("ardrone/reset", std_msgs.Empty._TYPE);
+	// Emergency stop message
 	Subscriber<std_msgs.Empty> subschannel = connectedNode.newSubscriber("ardrone/zap", std_msgs.Empty._TYPE);
+	// Ultrasonic sensor independant of ARDrone, rolled into point cloud range pub
 	Subscriber<sensor_msgs.Range> subsrange = connectedNode.newSubscriber("robocore/range", sensor_msgs.Range._TYPE);
 	
-	final Publisher<geometry_msgs.Quaternion> navpub =
-		connectedNode.newPublisher("ardrone/navdata", geometry_msgs.Quaternion._TYPE);
+	// navpub pushes navigation data from ARDrone IMU
+	final Publisher<sensor_msgs.Imu> navpub =
+		connectedNode.newPublisher("ardrone/navdata", sensor_msgs.Imu._TYPE);
+	// imgpub has raw camera image from ARDrone selected camera
 	final Publisher<sensor_msgs.Image> imgpub =
 		connectedNode.newPublisher("ardrone/image_raw", sensor_msgs.Image._TYPE);
+	// caminfopub has camera info
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
-	final Publisher<sensor_msgs.Range> rangepub = 
-		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
+	// rangepub has point cloud data of ultrasonic and other range finders all rolled into one, 
+	// assume first 2 points upper and lower ultrasonics
+	final Publisher<sensor_msgs.PointCloud> rangepub = 
+		connectedNode.newPublisher("ardrone/range", sensor_msgs.PointCloud._TYPE);
+	// statpub has status alerts that may come from ARDrone extreme attitude, temp etc.
 	final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
 			connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
+	
 	final Map<String, String> environment;
-	final String motorControlHost;
+
 
 	try{
-		/*
-		environment = System.getenv();
-		if( environment.containsKey("MOTORCONTROL") ) {
-			motorControlHost = environment.get("MOTORCONTROL");
-			System.out.println("Establishing motor control host as "+motorControlHost);
-		} else {
-			motorControlHost = "127.0.0.1";
-			System.out.println("Motor control host DEFAULTS TO LOOPBACK");
-		}
-		*/
-		// Look for the __motorcontrol:=host on the special remappings of the command line
-		Map<String,String> remaps = connectedNode.getNodeConfiguration().getCommandLineLoader().getSpecialRemappings();
-		if( remaps.get("__motorcontrol") != null )
-			motorControlHost = remaps.get("__motorcontrol");
-		else
-			motorControlHost = "127.0.0.1";
-		
-		System.out.println("Motor control host set to "+motorControlHost);
-		
+	
 		drone = (IDrone)AbstractConfigFactory.createFactory("Land").createDrone();
-		
-		// Options for control outside of ROS bus:
-		//setMotorControlListener(MotionController.getInstance());
-		
-		navListener = new NavListenerMotorControl(motorControlHost);
 		
 		drone.getNavDataManager().addAttitudeListener(new AttitudeListener() {
 			// theta phi psi
@@ -169,21 +160,21 @@ public void onStart(final ConnectedNode connectedNode) {
 					phi = troll;
 					theta = tpitch;
 					//gaz = nd.getAltitude();
-					//psi = yaw;
+					psi = tyaw;
 					//pitch = tpitch;
 					//roll = troll;
-					yaw = tyaw;
+					//yaw = tyaw;
 				}
 			}
 			// these are the euler angles vs raw data above
 			public void attitudeUpdated(float tpitch, float troll) { 
 				synchronized(navMutex) {
-					//phi = roll;
-					//theta = pitch;
+					phi = troll;
+					theta = tpitch;
 					//System.out.println("Pitch: " + pitch + " Roll: " + roll);
 					//((IARDroneLand)drone).move2D((int)phi,(float) theta);
-					pitch = tpitch;
-					roll = troll;
+					//pitch = tpitch;
+					//roll = troll;
 				}
 			}
 			
@@ -193,13 +184,16 @@ public void onStart(final ConnectedNode connectedNode) {
 				}
 			}
 		});
-		
+		/**
+		 * Upper ARDrone ultrasonic ranger
+		 */
 		drone.getNavDataManager().addAltitudeListener(new AltitudeListener() {
 			public void receivedExtendedAltitude(Altitude ud) {
 				synchronized(rngMutex) {
 					//System.out.println("Ext. Alt.:"+ud);
-					if( ud.getRaw() != 0 )
-						rangeTop = ud.getRaw();
+					if( ud.getRaw() != 0 ) {
+						rangeTop.setX(ud.getRaw());
+					}
 				}
 			}
 			@Override
@@ -207,7 +201,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				synchronized(rngMutex) {
 					//System.out.println("Altitude: "+altitude);
 					if( altitude != 0 ) {
-						rangeTop = altitude;
+						rangeTop.setX(altitude);
 					}
 				}
 			}
@@ -216,11 +210,12 @@ public void onStart(final ConnectedNode connectedNode) {
 	    drone.getVideoManager().addImageListener(new RGBListener() {
             public void imageUpdated(AVFrame newImage)
             {
+            	int bufferSize;
             	synchronized(vidMutex) {
             		imwidth = newImage.imageWidth;
             		imheight = newImage.imageHeight;
-            	}
-				int bufferSize = imwidth * imheight * 3;
+            		bufferSize = imwidth * imheight * 3;
+            	}	
 				//if (bbuf == null || bufferSize != bbuf.capacity()) {
 				//		bbuf = ByteBuffer.allocate(bufferSize);
 				//}
@@ -512,71 +507,14 @@ public void onStart(final ConnectedNode connectedNode) {
 	});
 	
 	/**
-	 * Extract the linear and angular components from cmd_vel topic Twist quaternions, take the linear X (pitch) and
-	 * angular Z (yaw) and send them to motor control. This results in motion planning computing a turn which
-	 * involves rotation about a point in space located at a distance related to speed and angular velocity. The distance
-	 * is used to compute the radius of the arc segment traversed by the wheel track to make the turn. If not moving we can
-	 * make the distance 0 and rotate about a point in space, otherwise we must inscribe an appropriate arc. The distance
-	 * in that case is the linear travel, otherwise the distance is the diameter of the arc segment.
-	 * If we get commands on the cmd_vel topic we assume we are moving, if we do not get the corresponding IMU readings, we have a problem
-	 * If we get a 0,0 on the X,yaw move we stop. If we dont see stable IMU again we have a problem, Houston.
+	 * Receives the ultrasonic range from supplimental ranger(s)
 	 */
-	subsmotion.addMessageListener(new MessageListener<geometry_msgs.Twist>() {
-	@Override
-	public void onNewMessage(geometry_msgs.Twist message) {
-		geometry_msgs.Vector3 val = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Vector3._TYPE);
-		val = message.getLinear();
-		float targetPitch = (float) val.getX();
-		val = message.getAngular();
-		float targetYaw = (float) val.getZ();
-		float tgyros[], taccs[];
-		float troll, tpitch;
-		int tvisionX,tvisionDist;
-		boolean tisVision;
-		if( targetPitch == 0.0 && targetYaw == 0.0 )
-				isMoving = false;
-		else
-				isMoving = true;
-		synchronized(navMutex) {
-			troll = (float) roll;
-			tpitch = (float) pitch;
-		}
-		try
-		{
-			//move2D(float yawIMURads, int yawTargetDegrees, int targetDistance, int targetTime)
-			synchronized(accs) {
-				taccs = accs.clone();
-			}
-			synchronized(gyros) {
-				tgyros = gyros.clone();
-			}
-			synchronized(visMutex) {
-				tvisionX = visionX;
-				tvisionDist = visionDistance;
-				tisVision = isVision;
-				isVision = false;
-			}
-			for(int i = 0; i < 3; i++)taccs[i] = Math.abs(taccs[i]-SHOCK_BASELINE[i]);
-			int ranges[] = new int[2];
-			ranges[0] = rangeTop;
-			ranges[1] = rangeBottom;
-			NavPacket np = new NavPacket(tgyros, taccs, ranges, 
-								tpitch, troll, (int)targetYaw, (int)targetPitch, 1, 
-								tisVision, tvisionX, tvisionDist);
-			navListener.pushData(np);
-	
-		} catch (Throwable e) {
-				e.printStackTrace();
-		} 
-		System.out.println("Robot commanded to move:" + targetPitch + "mm linear in orientation " + targetYaw+" euler:"+tpitch+" "+troll);
-		log.debug("Robot commanded to move:" + targetPitch + "mm linear in orientation " + targetYaw);
-	}
-	});
-
 	subsrange.addMessageListener(new MessageListener<sensor_msgs.Range>() {
 		@Override
 		public void onNewMessage(Range message) {
-			rangeBottom = (int) message.getRange();
+			synchronized(rngMutex) {
+				rangeBottom.setX(message.getRange());
+			}
 		}
 	});
 	
@@ -636,24 +574,52 @@ public void onStart(final ConnectedNode connectedNode) {
 			}
 			Thread.sleep(1);
 			
-			geometry_msgs.Quaternion str = navpub.newMessage();
-			synchronized(navMutex) {
-				str.setX(roll/*phi*/);
-				str.setY(pitch/*theta*/);
-				str.setZ(rangeTop); // gaz
-				str.setW(yaw/*psi*/);
+			sensor_msgs.Imu str = navpub.newMessage();
+			
+			// get accelerometer data and populate linear acceleration field
+			geometry_msgs.Vector3 val = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Vector3._TYPE); 
+			synchronized(accs) {
+					val.setX(accs[0]);
+					val.setY(accs[1]);
+					val.setZ(accs[2]);
 			}
+			str.setLinearAcceleration(val);
+			
+			// get gyro data and populate angular velocity fields
+			geometry_msgs.Vector3 valg = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Vector3._TYPE); 
+			synchronized(gyros) {
+					valg.setX(gyros[0]);
+					valg.setY(gyros[1]);
+					valg.setZ(gyros[2]);
+			}
+			str.setAngularVelocity(valg);
+				
+			geometry_msgs.Quaternion valq = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Quaternion._TYPE);
+			synchronized(navMutex) {
+				valq.setX(phi); // roll
+				valq.setY(theta); // pitch
+				valq.setZ(0.0); // gaz
+				valq.setW(psi); //yaw
+			}
+			str.setOrientation(valq);
+			
 			navpub.publish(str);
 			//System.out.println("Pub nav:"+str);
 			Thread.sleep(1);
 			
-			sensor_msgs.Range rangemsg = rangepub.newMessage();
-			rangemsg.setFieldOfView(35);
-			rangemsg.setMaxRange(6000);
-			rangemsg.setMinRange(0);
-			rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
+			// Generate point cloud data which will include
+			// ultrasonic range info and any other ranging we field
+			sensor_msgs.PointCloud rangemsg = rangepub.newMessage();
+			//rangemsg.setFieldOfView(35);
+			//rangemsg.setMaxRange(6000);
+			//rangemsg.setMinRange(0);
+			//rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
 			synchronized(rngMutex) {
-					rangemsg.setRange(rangeTop);
+					//rangemsg.setRange(rangeTop);
+				List<geometry_msgs.Point32> value = new ArrayList<geometry_msgs.Point32>();
+				value.add(rangeTop);
+				value.add(rangeBottom);
+				rangemsg.setPoints(value);
 			}
 			rangepub.publish(rangemsg);
 			//System.out.println("Pub rangeTop:"+rangemsg);
