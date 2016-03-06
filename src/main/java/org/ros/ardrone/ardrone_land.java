@@ -50,8 +50,6 @@ import de.yadrone.base.navdata.vision.VisionData;
 import de.yadrone.base.navdata.vision.VisionPerformance;
 import de.yadrone.base.navdata.vision.VisionTag;
 
-import com.neocoretechs.robocore.MotionController;
-import com.neocoretechs.robocore.MotorControl;
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
 import com.twilight.h264.player.RGBListener;
@@ -63,10 +61,10 @@ import com.twilight.h264.player.RGBListener;
  *
  */
 public class ardrone_land extends AbstractNodeMain  {
-
+	private boolean DEBUG = true;
 	IDrone drone;
 	//double phi, theta, psi;
-	geometry_msgs.Point32 rangeTop, rangeBottom; // Ultrasonic sensors, one is external to ARDrone and sits on the bus as robocore/range
+	float rangeTop; // Ultrasonic sensor
 	byte[] bbuf = null;// = new byte[320*240*3];
 	boolean started = true;
 	boolean videohoriz = true;
@@ -82,29 +80,29 @@ public class ardrone_land extends AbstractNodeMain  {
 	
 	float[] accs = new float[3]; // accelerometer values
 	float gyros[] = new float[3]; // gyro
+	short mag[] = new short[3]; // magnetometer
+	short temperature = 0;
+	int pressure = 0;
 	int visionDistance, visionAngle, visionX, visionY;
+	
+	boolean isTemp = true;
+	boolean isPress = true;
+	boolean isTag = false;
+	boolean isVision = false;
+	
 	Time tst;
 	int imwidth = 672, imheight = 418;
 
-	
 	ArrayBlockingQueue<byte[]> vidbuf = new ArrayBlockingQueue<byte[]>(128);
+	
 	Object vidMutex = new Object();
 	Object navMutex = new Object();
 	Object rngMutex = new Object();
 	Object visMutex = new Object();
+	Object magMutex = new Object();
+	Object tmpMutex = new Object();
+	Object prsMutex = new Object();
 
-	public static float[] SHOCK_BASELINE = { 971.0f, 136.0f, 36.0f};
-	public static float[] SHOCK_THRESHOLD = {1000.0f,1000.0f,1000.0f}; // deltas. 971, 136, 36 relatively normal values. seismic: last value swings from rangeTop -40 to 140
-	public static boolean isShock = false;
-	public static short[] MAG_THRESHOLD = {-1,-1,-1};
-	public static boolean isMag = false;
-	public static int PRESSURE_THRESHOLD = 100000; // pressure_meas is millibars*100 30in is 1014 milli
-	public static boolean isPressure = false;
-	public static long lastPressureNotification = 0; // time so we dont just keep yapping about the weather
-	public static int TEMPERATURE_THRESHOLD = 50000; // C*1000 122F
-	public static boolean isTemperature = false;
-	public static boolean isMoving = false;
-	public static boolean isVision = false; // machine vision recognition event
 	
 @Override
 public GraphName getDefaultNodeName() {
@@ -112,20 +110,20 @@ public GraphName getDefaultNodeName() {
 }
 
 /**
- * Start the main processing pipeline
+ * Start the main processing pipeline. We subscribe to an external ranging message robocore/range to augment the
+ * ultrasonic range and supply a complete point cloud to the ardrone/range channel. If we have ultrasonics
+ * they will be in the first elements of the point cloud array in X in addition to element 0 X being the ARDrone ranger
  */
 @Override
 public void onStart(final ConnectedNode connectedNode) {
-	rangeTop = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Point32._TYPE);
-	rangeBottom = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Point32._TYPE);	
+
 	final Log log = connectedNode.getLog();
 	//Subscriber<geometry_msgs.Twist> subsmotion = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
 	Subscriber<std_msgs.Empty> substol = connectedNode.newSubscriber("ardrone/activate", std_msgs.Empty._TYPE);
 	Subscriber<std_msgs.Empty> subsreset = connectedNode.newSubscriber("ardrone/reset", std_msgs.Empty._TYPE);
 	// Emergency stop message
 	Subscriber<std_msgs.Empty> subschannel = connectedNode.newSubscriber("ardrone/zap", std_msgs.Empty._TYPE);
-	// Ultrasonic sensor independant of ARDrone, rolled into point cloud range pub
-	Subscriber<sensor_msgs.Range> subsrange = connectedNode.newSubscriber("robocore/range", sensor_msgs.Range._TYPE);
+
 	
 	// navpub pushes navigation data from ARDrone IMU
 	final Publisher<sensor_msgs.Imu> navpub =
@@ -138,11 +136,19 @@ public void onStart(final ConnectedNode connectedNode) {
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	// rangepub has point cloud data of ultrasonic and other range finders all rolled into one, 
 	// assume first 2 points upper and lower ultrasonics
-	final Publisher<sensor_msgs.PointCloud> rangepub = 
-		connectedNode.newPublisher("ardrone/range", sensor_msgs.PointCloud._TYPE);
+	final Publisher<sensor_msgs.Range> rangepub = 
+		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
 	// statpub has status alerts that may come from ARDrone extreme attitude, temp etc.
-	final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
-			connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
+	//final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
+	//		connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
+	final Publisher<sensor_msgs.Temperature> temppub = 
+			connectedNode.newPublisher("ardrone/temperature", sensor_msgs.Temperature._TYPE);
+	final Publisher<sensor_msgs.FluidPressure> presspub = 
+			connectedNode.newPublisher("ardrone/pressure", sensor_msgs.FluidPressure._TYPE);
+	final Publisher<sensor_msgs.MagneticField> magpub = 
+			connectedNode.newPublisher("ardrone/magnetic_field", sensor_msgs.MagneticField._TYPE);
+	final Publisher<geometry_msgs.Quaternion> tagpub = 
+			connectedNode.newPublisher("ardrone/image_tag", geometry_msgs.Quaternion._TYPE);
 	
 	final Map<String, String> environment;
 
@@ -192,7 +198,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				synchronized(rngMutex) {
 					//System.out.println("Ext. Alt.:"+ud);
 					if( ud.getRaw() != 0 ) {
-						rangeTop.setX(ud.getRaw());
+						rangeTop = ud.getRaw();
 					}
 				}
 			}
@@ -201,7 +207,7 @@ public void onStart(final ConnectedNode connectedNode) {
 				synchronized(rngMutex) {
 					//System.out.println("Altitude: "+altitude);
 					if( altitude != 0 ) {
-						rangeTop.setX(altitude);
+						rangeTop = altitude;
 					}
 				}
 			}
@@ -274,21 +280,6 @@ public void onStart(final ConnectedNode connectedNode) {
 			public void receivedPhysData(AcceleroPhysData d) {
 				synchronized(accs) {
 					accs = d.getPhysAccs();
-					//System.out.println("Shock:"+accs[0]+" "+accs[1]+" "+accs[2]);
-					if( SHOCK_THRESHOLD[0] != -1 ) {
-						if( Math.abs(accs[0]-SHOCK_BASELINE[0]) > SHOCK_THRESHOLD[0] ) {
-							isShock = true;
-							return;
-						}
-						if( Math.abs(accs[1]-SHOCK_BASELINE[1]) > SHOCK_THRESHOLD[1] ) {
-							isShock = true;
-							return;
-						}
-						if( Math.abs(accs[2]-SHOCK_BASELINE[2]) > SHOCK_THRESHOLD[2] ) {
-							isShock = true;
-							return;
-						}
-					}
 				}
 				//System.out.println("Phys Accelero:"+d);
 			}
@@ -299,20 +290,8 @@ public void onStart(final ConnectedNode connectedNode) {
 			@Override
 			public void received(MagnetoData d) {
 				//System.out.println("Mag:"+d);
-				short mag[] = d.getM();
-				if( MAG_THRESHOLD[0] != -1 ) {
-					if( mag[0] > MAG_THRESHOLD[0] ) {
-						isMag = true;
-						return;
-					}
-					if( mag[1] > MAG_THRESHOLD[1] ) {
-						isMag = true;
-						return;
-					}
-					if( mag[2] > MAG_THRESHOLD[2] ) {
-						isMag = true;
-						return;
-					}		
+				synchronized(magMutex) {
+					mag = d.getM();
 				}
 			}
 
@@ -325,15 +304,12 @@ public void onStart(final ConnectedNode connectedNode) {
 			}
 			@Override
 			public void receivedPressure(Pressure d) {
-				//System.out.println("Pressure:"+d);
-				if( PRESSURE_THRESHOLD != -1 && PRESSURE_THRESHOLD > d.getMeasurement() ) { // check for dropping
-					long meas = System.currentTimeMillis()-lastPressureNotification;
-					if( meas > 1000000) {
-						isPressure = true;
-					}
-					return;
+				if( d.getMeasurement() != pressure ) {
+					pressure = d.getMeasurement();
+					isPress = true;
 				}
-				
+				//System.out.println("Pressure:"+d);
+
 			}
 	
 		});
@@ -342,9 +318,9 @@ public void onStart(final ConnectedNode connectedNode) {
 			@Override
 			public void receivedTemperature(Temperature d) {
 				//System.out.println("Temp:"+d);
-				if( TEMPERATURE_THRESHOLD != -1 && TEMPERATURE_THRESHOLD < d.getValue() ) {
-					isTemperature = true;
-					return;
+				if( d.getValue() != temperature ) {
+					temperature = d.getValue();
+					isTemp = true;
 				}
 			}
 		});
@@ -506,17 +482,6 @@ public void onStart(final ConnectedNode connectedNode) {
 	}
 	});
 	
-	/**
-	 * Receives the ultrasonic range from supplimental ranger(s)
-	 */
-	subsrange.addMessageListener(new MessageListener<sensor_msgs.Range>() {
-		@Override
-		public void onNewMessage(Range message) {
-			synchronized(rngMutex) {
-				rangeBottom.setX(message.getRange());
-			}
-		}
-	});
 	
 	/**
 	 * Main publishing loop. Essentially we are publishing the data in whatever state its in, using the
@@ -535,11 +500,6 @@ public void onStart(final ConnectedNode connectedNode) {
 		protected void loop() throws InterruptedException {
 			std_msgs.Header imghead = connectedNode.getTopicMessageFactory().newFromType(std_msgs.Header._TYPE);
 	
-			//So far I've been unable to figure out how to fill the K and P matrices
-			//using rosjava --J.Pablo
-			//double[] K = {imwidth/2.0, 0, imwidth/2.0, 0, 160, 120, 0, 0, 1};
-			//double[] P = {160, 0, 160, 0, 0, 160, 120, 0, 0, 0, 1, 0};
-
 			imghead.setSeq(sequenceNumber);
 			tst = connectedNode.getCurrentTime();
 			imghead.setStamp(tst);
@@ -574,6 +534,9 @@ public void onStart(final ConnectedNode connectedNode) {
 			}
 			Thread.sleep(1);
 			
+			//
+			// Begin IMU message construction for eventual outbound queueing
+			//
 			sensor_msgs.Imu str = navpub.newMessage();
 			
 			// get accelerometer data and populate linear acceleration field
@@ -602,83 +565,65 @@ public void onStart(final ConnectedNode connectedNode) {
 				valq.setW(psi); //yaw
 			}
 			str.setOrientation(valq);
-			
+			// Publish IMU data to ardrone/navdata
 			navpub.publish(str);
-			//System.out.println("Pub nav:"+str);
+			//
+			//if(DEBUG)
+			//	System.out.println("Pub nav:"+str);
 			Thread.sleep(1);
 			
 			// Generate point cloud data which will include
 			// ultrasonic range info and any other ranging we field
-			sensor_msgs.PointCloud rangemsg = rangepub.newMessage();
+			sensor_msgs.Range rangemsg = rangepub.newMessage();
 			//rangemsg.setFieldOfView(35);
 			//rangemsg.setMaxRange(6000);
 			//rangemsg.setMinRange(0);
 			//rangemsg.setRadiationType(sensor_msgs.Range.ULTRASOUND);
 			synchronized(rngMutex) {
-					//rangemsg.setRange(rangeTop);
-				List<geometry_msgs.Point32> value = new ArrayList<geometry_msgs.Point32>();
-				value.add(rangeTop);
-				value.add(rangeBottom);
-				rangemsg.setPoints(value);
+					rangemsg.setRange(rangeTop);
 			}
+			// Publish point cloud data to ardrone/range
 			rangepub.publish(rangemsg);
-			//System.out.println("Pub rangeTop:"+rangemsg);
+			//if(DEBUG)
+			//	System.out.println("Pub rangeTop:"+rangemsg);
+			
+			if( isTemp ) {
+				sensor_msgs.Temperature tmpmsg = temppub.newMessage();
+				tmpmsg.setTemperature(temperature);
+				temppub.publish(tmpmsg);
+				isTemp = false;
+			}
+			
+			if( isPress ) {
+				sensor_msgs.FluidPressure pressmsg = presspub.newMessage();
+				pressmsg.setFluidPressure(pressure);
+				presspub.publish(pressmsg);
+				isPress = false;
+			}
+			
+			sensor_msgs.MagneticField magmsg = magpub.newMessage();
+			geometry_msgs.Vector3 magv = connectedNode.getTopicMessageFactory().newFromType(geometry_msgs.Vector3._TYPE);
+			synchronized(magMutex) {
+				magv.setX(mag[0]);
+				magv.setY(mag[1]);
+				magv.setZ(mag[2]);
+				magmsg.setMagneticField(magv);
+			}
+			magpub.publish(magmsg);
+			
+			if( isVision) {
+				geometry_msgs.Quaternion tagmsg = tagpub.newMessage();
+				synchronized(visMutex) {
+					tagmsg.setX(visionX);
+					tagmsg.setY(visionY);
+					tagmsg.setZ(visionDistance);
+					tagmsg.setW(visionAngle);
+				}
+				tagpub.publish(tagmsg);
+				isVision = false;
+			}
+			
 			Thread.sleep(1);
-			
-			if( isShock || isMag || isPressure || isTemperature ) {
-				diagnostic_msgs.DiagnosticStatus statmsg = statpub.newMessage();
-				if(isShock && !isMoving) {
-					isShock = false;
-					statmsg.setName("shock");
-					statmsg.setLevel(diagnostic_msgs.DiagnosticStatus.WARN);
-					statmsg.setMessage("Accelerometer shock warning");
-					diagnostic_msgs.KeyValue kv = connectedNode.getTopicMessageFactory().newFromType(diagnostic_msgs.KeyValue._TYPE);
-					List<diagnostic_msgs.KeyValue> li = new ArrayList<diagnostic_msgs.KeyValue>();
-					li.add(kv);
-					statmsg.setValues(li);
-					statpub.publish(statmsg);
-					Thread.sleep(1);
-				}
-			
-				if(isMag && !isMoving) {
-					isMag = false;
-					statmsg.setName("magnetic");
-					statmsg.setLevel(diagnostic_msgs.DiagnosticStatus.WARN);
-					statmsg.setMessage("Magnetic anomaly detected");
-					diagnostic_msgs.KeyValue kv = connectedNode.getTopicMessageFactory().newFromType(diagnostic_msgs.KeyValue._TYPE);
-					List<diagnostic_msgs.KeyValue> li = new ArrayList<diagnostic_msgs.KeyValue>();
-					li.add(kv);
-					statmsg.setValues(li);
-					statpub.publish(statmsg);
-					Thread.sleep(1);
-				}
-			
-				if(isPressure) {
-					isPressure = false;
-					statmsg.setName("pressure");
-					statmsg.setLevel(diagnostic_msgs.DiagnosticStatus.WARN);
-					statmsg.setMessage("Atmospheric pressure warning");
-					diagnostic_msgs.KeyValue kv = connectedNode.getTopicMessageFactory().newFromType(diagnostic_msgs.KeyValue._TYPE);
-					List<diagnostic_msgs.KeyValue> li = new ArrayList<diagnostic_msgs.KeyValue>();
-					li.add(kv);
-					statmsg.setValues(li);
-					statpub.publish(statmsg);
-					Thread.sleep(1);
-				}
-			
-				if(isTemperature) {
-					isTemperature = false;
-					statmsg.setName("temprature");
-					statmsg.setLevel(diagnostic_msgs.DiagnosticStatus.WARN);
-					statmsg.setMessage("Temperature warning");
-					diagnostic_msgs.KeyValue kv = connectedNode.getTopicMessageFactory().newFromType(diagnostic_msgs.KeyValue._TYPE);
-					List<diagnostic_msgs.KeyValue> li = new ArrayList<diagnostic_msgs.KeyValue>();
-					li.add(kv);
-					statmsg.setValues(li);
-					statpub.publish(statmsg);
-					Thread.sleep(1);
-				}
-			} // isShock, isMag...
 	
 		}
 		
