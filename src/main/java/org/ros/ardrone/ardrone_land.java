@@ -91,7 +91,8 @@ public class ardrone_land extends AbstractNodeMain  {
 	boolean isVision = false;
 	
 	Time tst;
-	int imwidth = 672, imheight = 418;
+	//int imwidth = 672, imheight = 418;
+	int imwidth = 640, imheight = 360;
 
 	ArrayBlockingQueue<byte[]> vidbuf = new ArrayBlockingQueue<byte[]>(128);
 	
@@ -104,53 +105,53 @@ public class ardrone_land extends AbstractNodeMain  {
 	Object prsMutex = new Object();
 
 	
-@Override
-public GraphName getDefaultNodeName() {
-	return GraphName.of("ardrone");
-}
+	@Override
+	public GraphName getDefaultNodeName() {
+		return GraphName.of("ardrone");
+	}
 
-/**
- * Start the main processing pipeline. We subscribe to an external ranging message robocore/range to augment the
- * ultrasonic range and supply a complete point cloud to the ardrone/range channel. If we have ultrasonics
- * they will be in the first elements of the point cloud array in X in addition to element 0 X being the ARDrone ranger
- */
-@Override
-public void onStart(final ConnectedNode connectedNode) {
+	/**
+	 * Start the main processing pipeline. We subscribe to an external ranging message robocore/range to augment the
+	 * ultrasonic range and supply a complete point cloud to the ardrone/range channel. If we have ultrasonics
+	 * they will be in the first elements of the point cloud array in X in addition to element 0 X being the ARDrone ranger
+	 */
+	@Override
+	public void onStart(final ConnectedNode connectedNode) {
 
-	final Log log = connectedNode.getLog();
-	//Subscriber<geometry_msgs.Twist> subsmotion = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
-	Subscriber<std_msgs.Empty> substol = connectedNode.newSubscriber("ardrone/activate", std_msgs.Empty._TYPE);
-	Subscriber<std_msgs.Empty> subsreset = connectedNode.newSubscriber("ardrone/reset", std_msgs.Empty._TYPE);
-	// Emergency stop message
-	Subscriber<std_msgs.Empty> subschannel = connectedNode.newSubscriber("ardrone/zap", std_msgs.Empty._TYPE);
+		final Log log = connectedNode.getLog();
+		//Subscriber<geometry_msgs.Twist> subsmotion = connectedNode.newSubscriber("cmd_vel", geometry_msgs.Twist._TYPE);
+		Subscriber<std_msgs.Empty> substol = connectedNode.newSubscriber("ardrone/activate", std_msgs.Empty._TYPE);
+		Subscriber<std_msgs.Empty> subsreset = connectedNode.newSubscriber("ardrone/reset", std_msgs.Empty._TYPE);
+		// Emergency stop message
+		Subscriber<std_msgs.Empty> subschannel = connectedNode.newSubscriber("ardrone/zap", std_msgs.Empty._TYPE);
 
-	
-	// navpub pushes navigation data from ARDrone IMU
-	final Publisher<sensor_msgs.Imu> navpub =
+		// navpub pushes navigation data from ARDrone IMU
+		final Publisher<sensor_msgs.Imu> navpub =
 		connectedNode.newPublisher("ardrone/navdata", sensor_msgs.Imu._TYPE);
-	// imgpub has raw camera image from ARDrone selected camera
-	final Publisher<sensor_msgs.Image> imgpub =
+		// imgpub has raw camera image from ARDrone selected camera
+		final Publisher<sensor_msgs.Image> imgpub =
 		connectedNode.newPublisher("ardrone/image_raw", sensor_msgs.Image._TYPE);
-	// caminfopub has camera info
-	final Publisher<sensor_msgs.CameraInfo> caminfopub =
-		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
-	// rangepub has point cloud data of ultrasonic and other range finders all rolled into one, 
-	// assume first 2 points upper and lower ultrasonics
-	final Publisher<sensor_msgs.Range> rangepub = 
-		connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
-	// statpub has status alerts that may come from ARDrone extreme attitude, temp etc.
-	//final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
-	//		connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
-	final Publisher<sensor_msgs.Temperature> temppub = 
+		// caminfopub has camera info
+		//final Publisher<sensor_msgs.CameraInfo> caminfopub =
+		//connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
+		// rangepub has point cloud data of ultrasonic and other range finders all rolled into one, 
+		// assume first 2 points upper and lower ultrasonics
+		final Publisher<sensor_msgs.Range> rangepub = 
+				connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
+		// statpub has status alerts that may come from ARDrone extreme attitude, temp etc.
+		//final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
+		//		connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
+		final Publisher<sensor_msgs.Temperature> temppub = 
 			connectedNode.newPublisher("ardrone/temperature", sensor_msgs.Temperature._TYPE);
-	final Publisher<sensor_msgs.FluidPressure> presspub = 
+		final Publisher<sensor_msgs.FluidPressure> presspub = 
 			connectedNode.newPublisher("ardrone/pressure", sensor_msgs.FluidPressure._TYPE);
-	final Publisher<sensor_msgs.MagneticField> magpub = 
+		final Publisher<sensor_msgs.MagneticField> magpub = 
 			connectedNode.newPublisher("ardrone/magnetic_field", sensor_msgs.MagneticField._TYPE);
-	final Publisher<geometry_msgs.Quaternion> tagpub = 
+		// Image recognition from drone. Position and orientation of detected image in frame
+		final Publisher<geometry_msgs.Quaternion> tagpub = 
 			connectedNode.newPublisher("ardrone/image_tag", geometry_msgs.Quaternion._TYPE);
 	
-	final Map<String, String> environment;
+		//final Map<String, String> environment;
 
 
 	try{
@@ -217,19 +218,23 @@ public void onStart(final ConnectedNode connectedNode) {
             public void imageUpdated(AVFrame newImage)
             {
             	int bufferSize;
-            	synchronized(vidMutex) {
-            		imwidth = newImage.imageWidth;
-            		imheight = newImage.imageHeight;
-            		bufferSize = imwidth * imheight * 3;
-            	}	
+            	
 				//if (bbuf == null || bufferSize != bbuf.capacity()) {
 				//		bbuf = ByteBuffer.allocate(bufferSize);
 				//}
-				if( bbuf == null )
-					bbuf = new byte[bufferSize];
+				if( bbuf == null ) {
+					synchronized(vidMutex) {
+	            		imwidth = newImage.imageWidth;
+	            		imheight = newImage.imageHeight;
+	            		bufferSize = imwidth * imheight * 3;	
+	            		bbuf = new byte[bufferSize];
+					}
+				}
 				FrameUtils.YUV2RGB(newImage, bbuf); // RGBA32 to BGR8
 				try {
 					vidbuf.add(bbuf);
+					if( DEBUG )
+						System.out.println("Added frame..");
 				} catch(IllegalStateException ise) {
 					// buffer full;
 					System.out.println("Video buffer full!");
@@ -463,13 +468,13 @@ public void onStart(final ConnectedNode connectedNode) {
 			synchronized(vidMutex) {
 				if(videohoriz) {
 					drone.setHorizontalCamera();
-					imwidth = 672;
-					imheight = 418;
+					//imwidth = 672;
+					//imheight = 418;
 					log.info("Attempting to use the vertical camera.");
 				} else {
 					drone.setHorizontalCameraWithVertical();
-					imwidth = 672;
-					imheight = 418;
+					//imwidth = 672;
+					//imheight = 418;
 					log.info("Attempting to use the horizontal camera with vertical.");
 				}
 				videohoriz = !videohoriz;
@@ -503,13 +508,13 @@ public void onStart(final ConnectedNode connectedNode) {
 			imghead.setSeq(sequenceNumber);
 			tst = connectedNode.getCurrentTime();
 			imghead.setStamp(tst);
-			imghead.setFrameId("0");
+			imghead.setFrameId(tst.toString());
 
 			//if( bbuf != null ) {
 			byte[] bbuf = vidbuf.poll();
 			if( bbuf != null ) {
 				sensor_msgs.Image imagemess = imgpub.newMessage();
-				sensor_msgs.CameraInfo caminfomsg = caminfopub.newMessage();
+				//sensor_msgs.CameraInfo caminfomsg = caminfopub.newMessage();
             	//System.out.println("Image:"+newImage.imageWidth+","+newImage.imageHeight+" queue:"+list.size());
 				imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
 				imagemess.setEncoding("8UC3");
@@ -520,18 +525,22 @@ public void onStart(final ConnectedNode connectedNode) {
 						imagemess.setIsBigendian((byte)0);
 						imagemess.setHeader(imghead);
 						//
-						caminfomsg.setHeader(imghead);
-						caminfomsg.setWidth(imwidth);
-						caminfomsg.setHeight(imheight);
-						caminfomsg.setDistortionModel("plumb_bob");
+						//caminfomsg.setHeader(imghead);
+						//caminfomsg.setWidth(imwidth);
+						//caminfomsg.setHeight(imheight);
+						//caminfomsg.setDistortionModel("plumb_bob");
 				}
 				//caminfomsg.setK(K);
 				//caminfomsg.setP(P);
+				
 				imgpub.publish(imagemess);
-				caminfopub.publish(caminfomsg);
+				
+				System.out.println("Pub. Image:"+sequenceNumber);
+				//caminfopub.publish(caminfomsg);
 				//System.out.println("Pub cam:"+imagemess);
-				sequenceNumber++;	  	
+				sequenceNumber++;  	
 			}
+			
 			Thread.sleep(1);
 			
 			//
@@ -582,7 +591,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			synchronized(rngMutex) {
 					rangemsg.setRange(rangeTop);
 			}
-			// Publish point cloud data to ardrone/range
+			// Publish data to ardrone/range
 			rangepub.publish(rangemsg);
 			//if(DEBUG)
 			//	System.out.println("Pub rangeTop:"+rangemsg);
@@ -628,6 +637,8 @@ public void onStart(final ConnectedNode connectedNode) {
 		}
 		
 	}); // cancellable loop
+	
+	System.out.println("Leaving cancellable publishing loop");
 }
 
 
