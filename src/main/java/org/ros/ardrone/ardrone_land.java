@@ -7,6 +7,7 @@
 package org.ros.ardrone;
 
 import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +22,7 @@ import org.ros.node.ConnectedNode;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
 import org.ros.message.Time;
-import org.jboss.netty.buffer.ChannelBuffers;
+
 
 import sensor_msgs.Range;
 import de.yadrone.base.AbstractConfigFactory;
@@ -65,7 +66,11 @@ public class ardrone_land extends AbstractNodeMain  {
 	IDrone drone;
 	//double phi, theta, psi;
 	float rangeTop; // Ultrasonic sensor
-	byte[] bbuf = null;// = new byte[320*240*3];
+	
+	byte[] bbuf = null;// RGB buffer
+
+	boolean imageReady = false;
+	
 	boolean started = true;
 	boolean videohoriz = true;
 	boolean emergency = false;
@@ -94,7 +99,6 @@ public class ardrone_land extends AbstractNodeMain  {
 	//int imwidth = 672, imheight = 418;
 	int imwidth = 640, imheight = 360;
 
-	ArrayBlockingQueue<byte[]> vidbuf = new ArrayBlockingQueue<byte[]>(128);
 	
 	Object vidMutex = new Object();
 	Object navMutex = new Object();
@@ -218,28 +222,30 @@ public class ardrone_land extends AbstractNodeMain  {
             public void imageUpdated(AVFrame newImage)
             {
             	int bufferSize;
-            	
+            	if( imageReady ) return; // created but not yet published
 				//if (bbuf == null || bufferSize != bbuf.capacity()) {
 				//		bbuf = ByteBuffer.allocate(bufferSize);
 				//}
+            	synchronized(vidMutex) {
 				if( bbuf == null ) {
-					synchronized(vidMutex) {
 	            		imwidth = newImage.imageWidth;
 	            		imheight = newImage.imageHeight;
 	            		bufferSize = imwidth * imheight * 3;	
 	            		bbuf = new byte[bufferSize];
-					}
 				}
-				FrameUtils.YUV2RGB(newImage, bbuf); // RGBA32 to BGR8
-				try {
-					vidbuf.add(bbuf);
+				FrameUtils.YUV2RGB(newImage, bbuf);
+				//try {
+					//vidbuf.add(bbuf);
 					if( DEBUG )
-						System.out.println("Added frame..");
-				} catch(IllegalStateException ise) {
+						System.out.println("Added frame "+imwidth+","+imheight+" "+bbuf.length);
+				//} catch(IllegalStateException ise) {
 					// buffer full;
-					System.out.println("Video buffer full!");
+					//System.out.println("Video buffer full!");
 					//vidbuf.clear();
-				}
+				//}
+				
+            	} // vid mutex
+            	imageReady = true;
             }
 	    });
 	
@@ -509,37 +515,40 @@ public class ardrone_land extends AbstractNodeMain  {
 			tst = connectedNode.getCurrentTime();
 			imghead.setStamp(tst);
 			imghead.setFrameId(tst.toString());
-
+			sensor_msgs.Image imagemess = imgpub.newMessage();
 			//if( bbuf != null ) {
-			byte[] bbuf = vidbuf.poll();
-			if( bbuf != null ) {
-				sensor_msgs.Image imagemess = imgpub.newMessage();
+			//int[] bbuf = vidbuf.poll();
+		
+			if( bbuf != null && imageReady) {
+				synchronized(vidMutex) {		
 				//sensor_msgs.CameraInfo caminfomsg = caminfopub.newMessage();
             	//System.out.println("Image:"+newImage.imageWidth+","+newImage.imageHeight+" queue:"+list.size());
-				imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
-				imagemess.setEncoding("8UC3");
-				synchronized(vidMutex) {
-						imagemess.setWidth(imwidth);
-						imagemess.setHeight(imheight);
-						imagemess.setStep(imwidth*3);
-						imagemess.setIsBigendian((byte)0);
-						imagemess.setHeader(imghead);
-						//
-						//caminfomsg.setHeader(imghead);
-						//caminfomsg.setWidth(imwidth);
-						//caminfomsg.setHeight(imheight);
-						//caminfomsg.setDistortionModel("plumb_bob");
+					imagemess.setData(ByteBuffer.wrap(bbuf));
 				}
+				imagemess.setEncoding("8UC3");
+				
+				imagemess.setWidth(imwidth);
+				imagemess.setHeight(imheight);
+				imagemess.setStep(imwidth);
+				imagemess.setIsBigendian((byte)0);
+				imagemess.setHeader(imghead);
+				//
+				//caminfomsg.setHeader(imghead);
+				//caminfomsg.setWidth(imwidth);
+				//caminfomsg.setHeight(imheight);
+				//caminfomsg.setDistortionModel("plumb_bob");
 				//caminfomsg.setK(K);
 				//caminfomsg.setP(P);
 				
 				imgpub.publish(imagemess);
-				
-				System.out.println("Pub. Image:"+sequenceNumber);
+				imageReady = false;
+				if( DEBUG )
+					System.out.println("Pub. Image:"+sequenceNumber);
 				//caminfopub.publish(caminfomsg);
 				//System.out.println("Pub cam:"+imagemess);
 				sequenceNumber++;  	
 			}
+
 			
 			Thread.sleep(1);
 			
