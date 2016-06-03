@@ -123,7 +123,7 @@ public class ardrone_land extends AbstractNodeMain  {
 
 	/**
 	 * Start the main processing pipeline. We subscribe to an external ranging message robocore/range to augment the
-	 * ultrasonic range and supply a complete point cloud to the ardrone/range channel. If we have ultrasonics
+	 * ultrasonic range and supply a complete point cloud to the range/ultrasonic/ardrone channel. If we have ultrasonics
 	 * they will be in the first elements of the point cloud array in X in addition to element 0 X being the ARDrone ranger
 	 */
 	@Override
@@ -148,7 +148,7 @@ public class ardrone_land extends AbstractNodeMain  {
 		// rangepub has point cloud data of ultrasonic and other range finders all rolled into one, 
 		// assume first 2 points upper and lower ultrasonics
 		final Publisher<sensor_msgs.Range> rangepub = 
-				connectedNode.newPublisher("ardrone/range", sensor_msgs.Range._TYPE);
+				connectedNode.newPublisher("range/ultrasonic/ardrone", sensor_msgs.Range._TYPE);
 		// statpub has status alerts that may come from ARDrone extreme attitude, temp etc.
 		//final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
 		//		connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
@@ -616,7 +616,7 @@ public class ardrone_land extends AbstractNodeMain  {
 			synchronized(rngMutex) {
 					rangemsg.setRange(rangeTop);
 			}
-			// Publish data to ardrone/range
+			// Publish data to range/ultrasonic/ardrone
 			rangepub.publish(rangemsg);
 			//if(DEBUG)
 			//	System.out.println("Pub rangeTop:"+rangemsg);

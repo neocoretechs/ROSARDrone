@@ -10,6 +10,7 @@
 package org.ros.ardrone;
 
 import java.awt.image.BufferedImage;
+import java.nio.ByteBuffer;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 import org.apache.commons.logging.Log;
@@ -22,7 +23,6 @@ import org.ros.node.NodeMain;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
 import org.ros.message.Time;
-import org.jboss.netty.buffer.ChannelBuffers;
 
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
@@ -56,7 +56,7 @@ public class ardrone_air extends AbstractNodeMain  {
 
 @Override
 public GraphName getDefaultNodeName() {
-	return GraphName.of("ardrone");
+	return GraphName.of("pubs_ardrone");
 }
 
 
@@ -74,7 +74,7 @@ public void onStart(final ConnectedNode connectedNode) {
 	final Publisher<sensor_msgs.CameraInfo> caminfopub =
 		connectedNode.newPublisher("ardrone/camera_info", sensor_msgs.CameraInfo._TYPE);
 	final Publisher<sensor_msgs.Range> rangepub = 
-			connectedNode.newPublisher("ardrone/rangeTop", sensor_msgs.Range._TYPE);		
+			connectedNode.newPublisher("range/ultrasonic/ardrone", sensor_msgs.Range._TYPE);		
 	try{
 		drone = (IARDrone)AbstractConfigFactory.createFactory("Air").createDrone();
 		drone.getNavDataManager().addAttitudeListener(new AttitudeListener() {
@@ -266,7 +266,7 @@ public void onStart(final ConnectedNode connectedNode) {
 			imghead.setFrameId("0");
 			synchronized(vidMutex) {
 				if( bbuf != null ) {
-					imagemess.setData(ChannelBuffers.wrappedBuffer(bbuf));
+					imagemess.setData(ByteBuffer.wrap(bbuf));
 					imagemess.setEncoding("8UC3");
 					imagemess.setWidth(imwidth);
 					imagemess.setHeight(imheight);
