@@ -6,12 +6,18 @@
  */
 package org.ros.ardrone;
 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+
+import javax.imageio.ImageIO;
+import javax.imageio.stream.ImageOutputStream;
 
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
@@ -22,7 +28,6 @@ import org.ros.node.ConnectedNode;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
 import org.ros.message.Time;
-
 
 import sensor_msgs.Range;
 import de.yadrone.base.AbstractConfigFactory;
@@ -51,6 +56,8 @@ import de.yadrone.base.navdata.vision.VisionData;
 import de.yadrone.base.navdata.vision.VisionPerformance;
 import de.yadrone.base.navdata.vision.VisionTag;
 
+import com.sun.image.codec.jpeg.JPEGCodec;
+import com.sun.image.codec.jpeg.JPEGImageEncoder;
 import com.twilight.h264.decoder.AVFrame;
 import com.twilight.h264.player.FrameUtils;
 import com.twilight.h264.player.RGBListener;
@@ -230,10 +237,19 @@ public class ardrone_land extends AbstractNodeMain  {
 				if( bbuf == null ) {
 	            		imwidth = newImage.imageWidth;
 	            		imheight = newImage.imageHeight;
-	            		bufferSize = imwidth * imheight * 3;	
-	            		bbuf = new byte[bufferSize];
+	            		//bufferSize = imwidth * imheight * 3;	
+	            		//bbuf = new byte[bufferSize];
 				}
-				FrameUtils.YUV2RGB(newImage, bbuf);
+				BufferedImage bi = FrameUtils.imageFromFrame(newImage);//.YUV2RGB(newImage, bbuf);
+				try {
+					ByteArrayOutputStream os = new ByteArrayOutputStream();
+					JPEGImageEncoder encoder = JPEGCodec.createJPEGEncoder(os);
+					encoder.encode(bi);
+					bbuf =  os.toByteArray();	
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}//
 				//try {
 					//vidbuf.add(bbuf);
 					if( DEBUG )
@@ -525,7 +541,7 @@ public class ardrone_land extends AbstractNodeMain  {
             	//System.out.println("Image:"+newImage.imageWidth+","+newImage.imageHeight+" queue:"+list.size());
 					imagemess.setData(ByteBuffer.wrap(bbuf));
 				}
-				imagemess.setEncoding("8UC3");
+				imagemess.setEncoding("JPG"/*"8UC3"*/);
 				
 				imagemess.setWidth(imwidth);
 				imagemess.setHeight(imheight);
