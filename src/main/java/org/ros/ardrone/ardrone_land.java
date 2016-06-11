@@ -6,18 +6,13 @@
  */
 package org.ros.ardrone;
 
+import geometry_msgs.Quaternion;
+
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
 
-import javax.imageio.ImageIO;
-import javax.imageio.stream.ImageOutputStream;
 
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
@@ -29,11 +24,10 @@ import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
 import org.ros.message.Time;
 
-import sensor_msgs.Range;
 import de.yadrone.base.AbstractConfigFactory;
 import de.yadrone.base.IDrone;
-import de.yadrone.base.command.misc.DetectionType;
-import de.yadrone.base.command.vision.VisionTagType;
+//import de.yadrone.base.command.misc.DetectionType;
+//import de.yadrone.base.command.vision.VisionTagType;
 import de.yadrone.base.navdata.accel.AcceleroPhysData;
 import de.yadrone.base.navdata.accel.AcceleroRawData;
 import de.yadrone.base.navdata.data.Altitude;
@@ -55,6 +49,8 @@ import de.yadrone.base.navdata.listener.VisionListener;
 import de.yadrone.base.navdata.vision.VisionData;
 import de.yadrone.base.navdata.vision.VisionPerformance;
 import de.yadrone.base.navdata.vision.VisionTag;
+//import diagnostic_msgs.DiagnosticStatus;
+//import diagnostic_msgs.KeyValue;
 
 import com.sun.image.codec.jpeg.JPEGCodec;
 import com.sun.image.codec.jpeg.JPEGImageEncoder;
@@ -101,6 +97,7 @@ public class ardrone_land extends AbstractNodeMain  {
 	boolean isPress = true;
 	boolean isTag = false;
 	boolean isVision = false;
+	String visionName;
 	
 	Time tst;
 	//int imwidth = 672, imheight = 418;
@@ -115,6 +112,7 @@ public class ardrone_land extends AbstractNodeMain  {
 	Object tmpMutex = new Object();
 	Object prsMutex = new Object();
 
+
 	
 	@Override
 	public GraphName getDefaultNodeName() {
@@ -122,6 +120,7 @@ public class ardrone_land extends AbstractNodeMain  {
 	}
 
 	/**
+	 * 
 	 * Start the main processing pipeline. We subscribe to an external ranging message robocore/range to augment the
 	 * ultrasonic range and supply a complete point cloud to the range/ultrasonic/ardrone channel. If we have ultrasonics
 	 * they will be in the first elements of the point cloud array in X in addition to element 0 X being the ARDrone ranger
@@ -161,6 +160,8 @@ public class ardrone_land extends AbstractNodeMain  {
 		// Image recognition from drone. Position and orientation of detected image in frame
 		final Publisher<geometry_msgs.Quaternion> tagpub = 
 			connectedNode.newPublisher("ardrone/image_tag", geometry_msgs.Quaternion._TYPE);
+		//final Publisher<diagnostic_msgs.DiagnosticStatus> statpub =
+		//		connectedNode.newPublisher("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
 	
 		//final Map<String, String> environment;
 
@@ -225,10 +226,13 @@ public class ardrone_land extends AbstractNodeMain  {
 			}
 		});
 		
+		final ByteArrayOutputStream os = new ByteArrayOutputStream();
+		final JPEGImageEncoder encoder = JPEGCodec.createJPEGEncoder(os);
+		
 	    drone.getVideoManager().addImageListener(new RGBListener() {
             public void imageUpdated(AVFrame newImage)
             {
-            	int bufferSize;
+            	//int bufferSize;
             	if( imageReady ) return; // created but not yet published
 				//if (bbuf == null || bufferSize != bbuf.capacity()) {
 				//		bbuf = ByteBuffer.allocate(bufferSize);
@@ -242,10 +246,13 @@ public class ardrone_land extends AbstractNodeMain  {
 				}
 				BufferedImage bi = FrameUtils.imageFromFrame(newImage);//.YUV2RGB(newImage, bbuf);
 				try {
-					ByteArrayOutputStream os = new ByteArrayOutputStream();
-					JPEGImageEncoder encoder = JPEGCodec.createJPEGEncoder(os);
+					//ByteArrayOutputStream os = new ByteArrayOutputStream();
+					//JPEGImageEncoder encoder = JPEGCodec.createJPEGEncoder(os);
 					encoder.encode(bi);
-					bbuf =  os.toByteArray();	
+					os.flush();
+					bbuf =  os.toByteArray();
+					os.reset();
+					//os.close();
 				} catch (IOException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
@@ -366,6 +373,7 @@ public class ardrone_land extends AbstractNodeMain  {
 					// 0,0 top left 1000,1000 right bottom regardless of camera
 					visionX = vt.getX();
 					visionY = vt.getY();
+					visionName = vt.getSource().name();
 					//DetectionType dt = vt.getSource();
 					//String cmdsuf = dt.getCmdSuffix();
 					//String dtname = dt.name();
@@ -645,15 +653,40 @@ public class ardrone_land extends AbstractNodeMain  {
 			}
 			magpub.publish(magmsg);
 			
+			// ARDrone vision recognition tags, if detected
+			// Publishes to bus
 			if( isVision) {
-				geometry_msgs.Quaternion tagmsg = tagpub.newMessage();
+				/*DiagnosticStatus*/Quaternion tagmsg = tagpub.newMessage();
 				synchronized(visMutex) {
+					/*
+					ArrayList<KeyValue> orient = new ArrayList<KeyValue>();
+					KeyValue vx = new KeyValue();
+					vx.setKey("X");
+					vx.setValue(String.valueOf(visionX));
+					KeyValue vy = new KeyValue();
+					vy.setKey("Y");
+					vy.setValue(String.valueOf(visionY));
+					KeyValue vz = new KeyValue();
+					vz.setKey("Z Distance");
+					vz.setValue(String.valueOf(visionDistance));
+					KeyValue vw = new KeyValue();
+					vx.setKey("W Angle");
+					vx.setValue(String.valueOf(visionAngle));
+					orient.add(vx);
+					orient.add(vy);
+					orient.add(vz);
+					orient.add(vw);
+					tagmsg.setMessage(visionName);
+					tagmsg.setValues(orient);
+					*/
 					tagmsg.setX(visionX);
 					tagmsg.setY(visionY);
 					tagmsg.setZ(visionDistance);
 					tagmsg.setW(visionAngle);
+					
 				}
 				tagpub.publish(tagmsg);
+				//statpub.publish(tagmsg);
 				isVision = false;
 			}
 			
