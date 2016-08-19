@@ -13,7 +13,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
-
 import org.apache.commons.logging.Log;
 import org.ros.message.MessageListener;
 import org.ros.concurrent.CancellableLoop;
@@ -51,6 +50,7 @@ import de.yadrone.base.navdata.vision.VisionPerformance;
 import de.yadrone.base.navdata.vision.VisionTag;
 //import diagnostic_msgs.DiagnosticStatus;
 //import diagnostic_msgs.KeyValue;
+
 
 import com.sun.image.codec.jpeg.JPEGCodec;
 import com.sun.image.codec.jpeg.JPEGImageEncoder;
@@ -609,6 +609,8 @@ public class ardrone_land extends AbstractNodeMain  {
 			str.setOrientation(valq);
 			// Publish IMU data to ardrone/navdata
 			navpub.publish(str);
+			if( DEBUG )
+				printGyro(str.getLinearAcceleration(), str.getAngularVelocity(), str.getOrientation());
 			//
 			//if(DEBUG)
 			//	System.out.println("Pub nav:"+str);
@@ -699,5 +701,52 @@ public class ardrone_land extends AbstractNodeMain  {
 	System.out.println("Leaving cancellable publishing loop");
 }
 
-
+	private void printGyro(geometry_msgs.Vector3 angular, geometry_msgs.Vector3 linear, geometry_msgs.Quaternion orientation) {
+		synchronized(navMutex) {
+			System.out.println("Angular x:"+angular.getX());
+			System.out.println("Angular y:"+angular.getY());
+			System.out.println("Angular z:"+angular.getZ());
+			System.out.println("Linear x:"+linear.getX());
+			System.out.println("Linear y:"+linear.getY());
+			System.out.println("Linear z:"+linear.getZ());
+			System.out.println("Gyro x:"+orientation.getX());
+			System.out.println("Gyro y:"+orientation.getY());
+			System.out.println("gyro z:"+orientation.getZ());
+			System.out.println("gyro w:"+orientation.getW());
+			
+			double rh=getcompass(angular.getX(), angular.getY(), angular.getZ(),mag[0],mag[1],mag[2]);
+			System.out.println("RH:"+rh+" Mag:"+mag[0]+","+mag[1]+","+mag[2]);
+			
+		}
+	}
+	double getcompass(double d, double e, double f, int cx, int cy, int cz){
+		  /*
+		  double xh,yh,ayf,axf;
+		  ayf=e/57;//Convert to rad
+		  axf=d/57;//Convert to rad
+		  xh=cx*Math.cos(ayf)+cy*Math.sin(ayf)*Math.sin(axf)-cz*Math.cos(axf)*Math.sin(ayf);
+		  yh=cy*Math.cos(axf)+cz*Math.sin(axf);
+		 
+		  double var_compass=Math.atan2((double)yh,(double)xh) * (180 / Math.PI) -90; // angle in degrees
+		  if (var_compass>0){var_compass=var_compass-360;}
+		  var_compass=360+var_compass;
+		 
+		  return (var_compass);
+		  */
+		double heading;
+		if( cx == 0 )
+			heading = 0;
+		else
+			heading = Math.atan(cy/cx);
+		if (cx<0) {heading=180-heading;}
+		else
+			if(cx>0  && cy<0){heading=-heading;}
+		else
+			if(cx>0  && cy>0){heading=360-heading;}
+		else
+			if(cx==0 && cy<0){heading=90;}
+		else
+			if(cx==0 && cy>0){heading=270;}
+		return heading;
+	}
 }
