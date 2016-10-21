@@ -701,7 +701,7 @@ public class ardrone_land extends AbstractNodeMain  {
 	System.out.println("Leaving cancellable publishing loop");
 }
 
-	private void printGyro(geometry_msgs.Vector3 angular, geometry_msgs.Vector3 linear, geometry_msgs.Quaternion orientation) {
+	protected void printGyro(geometry_msgs.Vector3 angular, geometry_msgs.Vector3 linear, geometry_msgs.Quaternion orientation) {
 		synchronized(navMutex) {
 			System.out.println("Angular x:"+angular.getX());
 			System.out.println("Angular y:"+angular.getY());
@@ -719,7 +719,7 @@ public class ardrone_land extends AbstractNodeMain  {
 			
 		}
 	}
-	double getcompass(double d, double e, double f, int cx, int cy, int cz){
+	protected double getcompass(double d, double e, double f, int cx, int cy, int cz){
 		  /*
 		  double xh,yh,ayf,axf;
 		  ayf=e/57;//Convert to rad
